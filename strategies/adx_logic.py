@@ -135,21 +135,29 @@ def adx_signal(
     #  7. ENTRY — открываем новую позицию
     # ══════════════════════════════════════════════════════
 
-    # Основная зона: сильный ADX и растёт → входим при чётком DI
+    # Основная зона: сильный ADX растёт → входим при чётком DI
     if is_strong and adx_rising:
         if bullish and (is_clear or is_strong_di):
             return "long"
         if bearish and (is_clear or is_strong_di):
             return "short"
 
-    # Переходная зона (20–25): только при очень сильном DI сигнале
+    # Основная зона: сильный ADX стабилен (не падает) → входим при очень чётком DI
+    # Покрывает устоявшийся тренд, где ADX перестал расти но ещё силён
+    if is_strong and not adx_rising and not adx_falling:
+        if bullish and is_strong_di:
+            return "long"
+        if bearish and is_strong_di:
+            return "short"
+
+    # Переходная зона (20–25): только при очень сильном DI сигнале и росте ADX
     if is_transition and adx_rising and is_strong_di:
         if bullish:
             return "long"
         if bearish:
             return "short"
 
-    # ADX силён, но не растёт → не открываем, только держим
+    # ADX силён, но не растёт и позиция открыта → держим
     if is_strong and not adx_rising and position != "none":
         return "hold"
 
@@ -174,6 +182,10 @@ if __name__ == "__main__":
         (29,   27,    7,  20,  "short", "hold"),        # тренд жив, держим шорт
         (31,   29,   18,   6,  "short", "exit_short"),  # DI развернулись против шорта
         (19,   18,   30,   5,  "long",  "no_trade"),    # ADX слаб → выход НЕ по ADX-сигналу, no_trade
+        # Новые кейсы: стабильный сильный ADX (устоявшийся тренд)
+        (28,   28,   22,   9,  "none",  "long"),        # ADX стабилен, сильный DI → входим лонг
+        (28,   28,    9,  22,  "none",  "short"),       # ADX стабилен, сильный DI → входим шорт
+        (28,   28,   14,   8,  "none",  "no_trade"),    # ADX стабилен, DI слабый → не входим
     ]
 
     cfg = ADXConfig()
