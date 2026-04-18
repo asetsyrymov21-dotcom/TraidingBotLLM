@@ -20,27 +20,35 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "`n🚀 Деплой бота..." -ForegroundColor Yellow
 
+# ── Удаляем зависший lock-файл ──
+if (Test-Path ".git\index.lock") {
+    Write-Host "⚠️  Найден git lock — удаляю..." -ForegroundColor Yellow
+    Remove-Item ".git\index.lock" -Force
+}
+
 # ── 1. Git commit + push ──
 Write-Host "`n[1/4] Git..." -ForegroundColor Yellow
 git add -A
 
-$staged = git diff --staged --quiet
+git diff --staged --quiet
 if ($LASTEXITCODE -ne 0) {
     if ($CommitMsg -eq "") {
         $CommitMsg = "update $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
     }
     git commit -m $CommitMsg
+    if ($LASTEXITCODE -ne 0) { Write-Host "❌ Коммит провалился" -ForegroundColor Red; exit 1 }
     Write-Host "✅ Коммит: $CommitMsg" -ForegroundColor Green
 } else {
     Write-Host "Нет новых изменений." -ForegroundColor Gray
 }
 
-git push origin main
+git push origin master
+if ($LASTEXITCODE -ne 0) { Write-Host "❌ Push провалился — проверь токен" -ForegroundColor Red; exit 1 }
 Write-Host "✅ Запушено в GitHub" -ForegroundColor Green
 
 # ── 2. SSH: git pull ──
 Write-Host "`n[2/4] Обновляем код на VPS..." -ForegroundColor Yellow
-ssh -i $SSH_KEY -o StrictHostKeyChecking=no "$VPS_USER@$VPS_HOST" "cd $BOT_DIR && git pull origin main"
+ssh -i $SSH_KEY -o StrictHostKeyChecking=no "$VPS_USER@$VPS_HOST" "cd $BOT_DIR && git pull origin master"
 Write-Host "✅ Код обновлён" -ForegroundColor Green
 
 # ── 3. SSH: обновить зависимости ──
