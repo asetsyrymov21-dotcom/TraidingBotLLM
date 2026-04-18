@@ -30,6 +30,8 @@ class MarketSnapshot:
     ema_fast: float           # EMA50
     ema_slow: float           # EMA200
     adx: float
+    plus_di: float            # +DI: давление покупателей
+    minus_di: float           # -DI: давление продавцов
     atr: float
     atr_pct: float            # ATR в % от цены
     trend_direction: int      # +1 лонг, -1 шорт, 0 нейтрально
@@ -68,11 +70,19 @@ class MarketAnalyzer:
         highs  = np.array([c[2] for c in ohlcv], dtype=float)
         lows   = np.array([c[3] for c in ohlcv], dtype=float)
 
-        ema_fast = self._ema(closes, self.cfg.ema_fast)[-1]
-        ema_slow = self._ema(closes, self.cfg.ema_slow)[-1]
-        adx      = self._adx(highs, lows, closes, self.cfg.adx_period)[-1]
-        atr      = self._atr(highs, lows, closes, self.cfg.atr_period)[-1]
-        rsi      = self._rsi(closes, 14)[-1]
+        ema_fast_arr = self._ema(closes, self.cfg.ema_fast)
+        ema_slow_arr = self._ema(closes, self.cfg.ema_slow)
+        ema_fast = ema_fast_arr[-1]
+        ema_slow = ema_slow_arr[-1]
+
+        adx_arr, pdi_arr, mdi_arr = self._adx(highs, lows, closes, self.cfg.adx_period)
+        adx     = adx_arr[-1]
+        plus_di = pdi_arr[-1]
+        minus_di = mdi_arr[-1]
+
+        atr_series = self._atr(highs, lows, closes, self.cfg.atr_period)
+        atr  = atr_series[-1]
+        rsi  = self._rsi(closes, 14)[-1]
 
         macd_line, macd_signal, _ = self._macd(closes)
         bb_upper, bb_mid, bb_lower = self._bollinger(closes)
@@ -80,8 +90,13 @@ class MarketAnalyzer:
         close = closes[-1]
         atr_pct = atr / close
 
+        # Наклон EMA50 за последние 5 свечей (в % от цены)
+        ema_fast_slope = (ema_fast_arr[-1] - ema_fast_arr[-6]) / close if len(ema_fast_arr) >= 6 else 0.0
+
         # ── Определение состояния ──
-        state = self._classify_market(ema_fast, ema_slow, adx, atr, closes)
+        state = self._classify_market(
+            ema_fast, ema_slow, adx, plus_di, minus_di, ema_fast_slope, close
+        )
         trend_dir = 0
         if state == MarketState.TREND_UP:
             trend_dir = 1
@@ -89,7 +104,6 @@ class MarketAnalyzer:
             trend_dir = -1
 
         # Аномальная волатильность: ATR > среднего ATR * atr_high_volatility_multiplier
-        atr_series = self._atr(highs, lows, closes, self.cfg.atr_period)
         avg_atr = np.mean(atr_series[-50:]) if len(atr_series) >= 50 else atr
         high_volatility = atr > avg_atr * self.cfg.atr_high_volatility_multiplier
 
@@ -99,6 +113,8 @@ class MarketAnalyzer:
             ema_fast=ema_fast,
             ema_slow=ema_slow,
             adx=adx,
+            plus_di=plus_di,
+            minus_di=minus_di,
             atr=atr,
             atr_pct=atr_pct,
             trend_direction=trend_dir,
@@ -113,7 +129,8 @@ class MarketAnalyzer:
         logger.info(
             f"Market: {state.value} | Close={close:.4f} | "
             f"EMA50={ema_fast:.2f} EMA200={ema_slow:.2f} | "
-            f"ADX={adx:.1f} | ATR={atr:.4f} ({atr_pct*100:.2f}%) | RSI={rsi:.1f}"
+            f"ADX={adx:.1f} +DI={plus_di:.1f} -DI={minus_di:.1f} | "
+            f"ATR={atr:.4f} ({atr_pct*100:.2f}%) | RSI={rsi:.1f}"
         )
         return snapshot
 
@@ -126,28 +143,54 @@ class MarketAnalyzer:
         ema_fast: float,
         ema_slow: float,
         adx: float,
-        atr: float,
-        closes: np.ndarray,
+        plus_di: float,
+        minus_di: float,
+        ema_fast_slope: float,
+        close: float,
     ) -> MarketState:
+        """
+        Определяет режим рынка: TREND_UP / TREND_DOWN / FLAT.
+
+        Логика (3-факторная):
+        1. ADX — сила тренда (< flat_threshold → сразу FLAT)
+        2. +DI vs -DI — ТЕКУЩЕЕ давление (покупатели vs продавцы).
+           Реагирует быстро, не страдает от лага EMA200.
+        3. Наклон EMA50 — подтверждение направления за последние ~5 свечей.
+
+        Для признания TREND нужно: ADX сильный И +DI/-DI согласны И EMA50 наклонена туда же.
+        Если хотя бы одно условие не выполнено — FLAT (лучше пропустить вход, чем войти в ложный тренд).
+        """
         cfg = self.cfg
 
-        has_trend = adx >= cfg.adx_trend_threshold   # ADX >= 25 → сильный тренд
-        is_flat   = adx <= cfg.adx_flat_threshold    # ADX <= 20 → флэт
-
-        if is_flat:
+        # ── 1. ADX: достаточно ли тренда? ──
+        if adx <= cfg.adx_flat_threshold:
             return MarketState.FLAT
 
-        if has_trend:
-            # Тренд подтверждён ADX — определяем направление по EMA
-            if ema_fast > ema_slow:
-                return MarketState.TREND_UP
-            elif ema_fast < ema_slow:
-                return MarketState.TREND_DOWN
+        if adx < cfg.adx_trend_threshold:
+            # Промежуточная зона — консервативно считаем флэтом
+            return MarketState.FLAT
 
-        # Промежуточная зона (20 < ADX < 25):
-        # ADX недостаточно силён для уверенного тренда → считаем флэтом.
-        # EMA50/200 здесь ненадёжны: они медленные и ещё помнят прошлый тренд,
-        # поэтому давали ложный TREND_UP даже в боковике.
+        # ── 2. ADX >= 25: тренд есть, определяем направление ──
+        # +DI > -DI → преобладают покупатели (потенциальный UP)
+        # -DI > +DI → преобладают продавцы  (потенциальный DOWN)
+        di_bullish = plus_di > minus_di
+        di_bearish = minus_di > plus_di
+
+        # ── 3. Наклон EMA50 за ~5 свечей (подтверждение) ──
+        # Небольшой порог 0.0001 отсеивает "почти горизонтальные" EMA
+        slope_up   = ema_fast_slope >  0.0001
+        slope_down = ema_fast_slope < -0.0001
+
+        # ── 4. Финальное решение ──
+        # TREND_UP:   +DI доминирует И EMA50 растёт
+        if di_bullish and slope_up:
+            return MarketState.TREND_UP
+
+        # TREND_DOWN: -DI доминирует И EMA50 падает
+        if di_bearish and slope_down:
+            return MarketState.TREND_DOWN
+
+        # Сигналы противоречат друг другу → FLAT (неопределённость)
         return MarketState.FLAT
 
     # ──────────────────────────────────────────
@@ -206,8 +249,13 @@ class MarketAnalyzer:
         return atr
 
     @staticmethod
-    def _adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> np.ndarray:
-        """Average Directional Index"""
+    def _adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Average Directional Index.
+        Возвращает кортеж (adx, +DI, -DI).
+        +DI > -DI → преобладают покупатели (up-pressure).
+        -DI > +DI → преобладают продавцы  (down-pressure).
+        """
         n = len(closes)
         plus_dm  = np.zeros(n)
         minus_dm = np.zeros(n)
@@ -243,7 +291,8 @@ class MarketAnalyzer:
             adx[period*2] = np.mean(dx[period:period*2])
             for i in range(period*2 + 1, n):
                 adx[i] = (adx[i-1] * (period - 1) + dx[i]) / period
-        return adx
+
+        return adx, pdi, mdi
 
     @staticmethod
     def _macd(closes: np.ndarray, fast=12, slow=26, signal=9) -> Tuple:

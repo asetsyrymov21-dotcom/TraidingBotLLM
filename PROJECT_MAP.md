@@ -157,6 +157,20 @@ Telegram-уведомления о действиях бота. Отправля
 
 ---
 
+### `symbol_scanner.py`
+Автоматический выбор торговых пар по объёму.
+
+- Получает список всех USDT-фьючерсных тикеров через CCXT (`fetch_tickers`)
+- Сортирует по `quoteVolume` (24h объём в USDT), берёт топ-N
+- Фильтрует стейблкоины и дубликаты через встроенный `BLACKLIST`
+- Кэширует результат — обновляет список не чаще одного раза в **24 часа**
+- При ошибке → возвращает предыдущий кэш или резервный список `[BTC/USDT, ETH/USDT, BNB/USDT]`
+- Методы: `get_top_symbols()`, `force_refresh()`, `should_refresh()`
+
+**Что менять здесь:** кол-во пар (`top_n`), интервал обновления (`REFRESH_INTERVAL`), черный список (`BLACKLIST`).
+
+---
+
 ### `requirements.txt`
 Зависимости проекта:
 - `ccxt>=4.2.0` — подключение к биржам
@@ -219,15 +233,23 @@ GRID-стратегия для флэтового рынка.
 ```
 main.py
   └── MultiUserRunner
-        └── BotEngine (per user)
-              ├── ExchangeConnector  ←→  Binance / Bybit
-              ├── MarketAnalyzer     ←  OHLCV данные
-              ├── RiskManager        ←  баланс
-              └── стратегии:
-                    ├── GridStrategy    (флэт)
-                    ├── TrendStrategy   (тренд)
-                    └── EntryStrategy   (тренд)
+        └── UserContext (per user)
+              ├── SymbolScanner  →  топ-N пар по объёму (обновление 1р/24ч)
+              └── BotEngine × N  (по одному на каждую пару)
+                    ├── ExchangeConnector  ←→  Binance / Bybit
+                    ├── MarketAnalyzer     ←  OHLCV данные
+                    ├── RiskManager        ←  баланс (1 на пользователя)
+                    └── стратегии:
+                          ├── GridStrategy    (флэт)
+                          ├── TrendStrategy   (тренд)
+                          └── EntryStrategy   (тренд)
 ```
+
+**Мультипарный режим:**
+- `UserProfile.top_n_symbols > 0` → SymbolScanner выбирает топ-N пар автоматически
+- `UserProfile.symbols = [...]` → ручной фиксированный список пар
+- Иначе → одна пара из `UserProfile.symbol` (backward compat)
+- `deposit_pct` делится поровну между всеми активными парами
 
 ---
 

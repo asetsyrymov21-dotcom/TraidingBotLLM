@@ -5,7 +5,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 # ──────────────────────────────────────────
@@ -116,14 +116,35 @@ class UserProfile:
     exchange: str                          # "binance" или "bybit"
     api_key: str
     api_secret: str
-    symbol: str = "BTC/USDT"
+    symbol: str = "BTC/USDT"             # Одна пара (backward compat)
+    symbols: List[str] = field(default_factory=list)  # Список пар (мультипарный режим)
+    top_n_symbols: int = 5               # Сколько топ-пар выбирать автоматически (0 = ручной список)
     leverage: int = 3
-    deposit_pct: float = 0.10             # % депозита на торговлю
+    deposit_pct: float = 0.10             # % депозита на торговлю (суммарно на все пары)
     commission_pct: float = 0.20          # Комиссия системы с прибыли
     strategy_override: Optional[str] = None  # Принудительная стратегия
     is_testnet: bool = False
     custom_config: Optional[Dict] = None  # Переопределение параметров
     telegram_chat_id: str = ""            # Личный chat_id пользователя в Telegram
+
+    def get_active_symbols(self) -> List[str]:
+        """
+        Возвращает список активных пар.
+        Приоритет: symbols (если задан) → [symbol] (backward compat).
+        При top_n_symbols > 0 список заполняется SymbolScanner'ом снаружи.
+        """
+        if self.symbols:
+            return list(self.symbols)
+        return [self.symbol]
+
+    def per_pair_deposit_pct(self, n_pairs: int) -> float:
+        """
+        % депозита на одну пару при торговле n_pairs парами параллельно.
+        Суммарный deposit_pct делится равномерно.
+        """
+        if n_pairs <= 1:
+            return self.deposit_pct
+        return self.deposit_pct / n_pairs
 
     def get_effective_config(self, base: SystemConfig) -> SystemConfig:
         """Возвращает конфиг с учётом пользовательских переопределений"""

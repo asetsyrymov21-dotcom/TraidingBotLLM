@@ -15,6 +15,13 @@ BOT_DIR="/opt/trading-bot/TraidingBotLLM"
 
 set -e
 
+# Удаляем зависший lock-файл если есть
+LOCK_FILE=".git/index.lock"
+if [ -f "$LOCK_FILE" ]; then
+  echo -e "${YELLOW}⚠️  Найден зависший git lock — удаляю...${NC}"
+  rm -f "$LOCK_FILE"
+fi
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
@@ -31,13 +38,13 @@ else
   git commit -m "$COMMIT_MSG"
   echo -e "${GREEN}✅ Коммит: $COMMIT_MSG${NC}"
 fi
-git push origin main
+git push origin master
 echo -e "${GREEN}✅ Запушено в GitHub${NC}"
 
 # ── 2. SSH: git pull ──
 echo -e "\n${YELLOW}[2/4] Обновляем код на VPS...${NC}"
 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$VPS_USER@$VPS_HOST" \
-  "cd $BOT_DIR && git pull origin main"
+  "cd $BOT_DIR && git pull origin master"
 echo -e "${GREEN}✅ Код обновлён${NC}"
 
 # ── 3. SSH: обновить зависимости ──

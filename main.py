@@ -8,11 +8,13 @@ import os
 import signal
 import sys
 import threading
-from typing import Dict
+import time
+from typing import Dict, List, Optional
 
 from config import SystemConfig, UserProfile
 from bot_engine import BotEngine
 from user_manager import UserManager
+from symbol_scanner import SymbolScanner
 from telegram_notifier import TelegramNotifier
 
 
@@ -32,102 +34,281 @@ def setup_logging(log_file: str = "bot.log", level: str = "INFO"):
 logger = logging.getLogger(__name__)
 
 
-class MultiUserRunner:
-    def __init__(self, config: SystemConfig, notifier: TelegramNotifier = None):
+# ──────────────────────────────────────────
+#  Контейнер: пользователь + все его движки
+# ──────────────────────────────────────────
+
+class UserContext:
+    """
+    Хранит все BotEngine одного пользователя и связанный SymbolScanner.
+    Один пользователь → N пар → N движков.
+    """
+
+    def __init__(
+        self,
+        profile: UserProfile,
+        config: SystemConfig,
+        notifier: Optional[TelegramNotifier] = None,
+    ):
+        self.profile = profile
         self.config = config
         self.notifier = notifier
+
+        # Движки: ключ = symbol
         self.engines: Dict[str, BotEngine] = {}
-        self.threads: Dict[str, threading.Thread] = {}
+
+        # Сканер пар (только если top_n_symbols > 0)
+        self.scanner: Optional[SymbolScanner] = None
+        if profile.top_n_symbols > 0:
+            self.scanner = SymbolScanner(
+                exchange_name=profile.exchange,
+                api_key=profile.api_key,
+                api_secret=profile.api_secret,
+                is_testnet=profile.is_testnet,
+                top_n=profile.top_n_symbols,
+            )
+
+    @property
+    def user_id(self) -> str:
+        return self.profile.user_id
+
+    def get_target_symbols(self) -> List[str]:
+        """
+        Возвращает актуальный список пар для торговли.
+        Если top_n_symbols > 0 — берём из SymbolScanner.
+        Иначе — из profile.get_active_symbols() (ручной список или одна пара).
+        """
+        if self.scanner:
+            symbols = self.scanner.get_top_symbols()
+            if symbols:
+                return symbols
+            logger.warning(
+                f"[{self.user_id}] Scanner вернул пустой список — используем symbols из профиля"
+            )
+        return self.profile.get_active_symbols()
+
+    def sync_engines(self):
+        """
+        Синхронизирует движки с актуальным списком пар.
+        - Добавляет движки для новых пар
+        - Останавливает и удаляет движки устаревших пар
+        """
+        target = set(self.get_target_symbols())
+        current = set(self.engines.keys())
+
+        # Пары, которые нужно добавить
+        to_add = target - current
+        # Пары, которые нужно удалить
+        to_remove = current - target
+
+        for sym in to_remove:
+            logger.info(f"[{self.user_id}] Удаляем движок для {sym}")
+            engine = self.engines.pop(sym)
+            try:
+                engine.stop()
+            except Exception as e:
+                logger.error(f"[{self.user_id}] Ошибка при остановке {sym}: {e}")
+
+        n_total = len(target)
+        per_pair_pct = self.profile.per_pair_deposit_pct(n_total)
+
+        for sym in to_add:
+            logger.info(
+                f"[{self.user_id}] Запускаем движок для {sym} "
+                f"(deposit_pct={per_pair_pct:.3f})"
+            )
+            try:
+                engine = BotEngine(
+                    profile=self.profile,
+                    config=self.config,
+                    notifier=self.notifier,
+                    symbol=sym,
+                    deposit_pct_override=per_pair_pct,
+                )
+                engine.start()
+                self.engines[sym] = engine
+            except Exception as e:
+                logger.error(
+                    f"[{self.user_id}] Не удалось запустить движок для {sym}: {e}"
+                )
+
+    def stop_all(self):
+        """Останавливает все движки."""
+        for sym, engine in list(self.engines.items()):
+            try:
+                engine.stop()
+                logger.info(f"[{self.user_id}] Движок {sym} остановлен")
+            except Exception as e:
+                logger.error(f"[{self.user_id}] Ошибка при остановке {sym}: {e}")
+        self.engines.clear()
+
+    def tick_all(self) -> Dict[str, Dict]:
+        """Запускает тик на всех активных движках. Возвращает результаты."""
+        results = {}
+        for sym, engine in list(self.engines.items()):
+            if not engine.is_running:
+                continue
+            try:
+                results[sym] = engine.tick()
+            except Exception as e:
+                logger.error(f"[{self.user_id}:{sym}] Ошибка тика: {e}", exc_info=True)
+                results[sym] = {"status": "error", "message": str(e)}
+        return results
+
+
+# ──────────────────────────────────────────
+#  MultiUserRunner
+# ──────────────────────────────────────────
+
+class MultiUserRunner:
+    """
+    Запускает нескольких пользователей.
+    Для каждого пользователя — N BotEngine (по одному на торговую пару).
+    Список пар обновляется раз в 24 часа через SymbolScanner.
+    """
+
+    def __init__(self, config: SystemConfig, notifier: Optional[TelegramNotifier] = None):
+        self.config = config
+        self.notifier = notifier
+        self.contexts: Dict[str, UserContext] = {}
         self._stop_event = threading.Event()
         self._tick_summary_interval = config.telegram.tick_summary_interval
+        self._global_tick: int = 0
 
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-    def add_user(self, profile: UserProfile):
-        engine = BotEngine(profile, self.config, notifier=self.notifier)
-        self.engines[profile.user_id] = engine
-        logger.info(f"Added user '{profile.user_id}' to runner")
-
-    def run(self, interval_seconds: int = 60):
+    def add_user(self, profile: UserProfile, user_notifier: Optional[TelegramNotifier] = None):
+        """Регистрирует пользователя в раннере."""
+        ctx = UserContext(
+            profile=profile,
+            config=self.config,
+            notifier=user_notifier or self.notifier,
+        )
+        self.contexts[profile.user_id] = ctx
         logger.info(
-            f"Starting {len(self.engines)} user(s). Tick interval: {interval_seconds}s"
+            f"Добавлен пользователь '{profile.user_id}' "
+            f"(top_n={profile.top_n_symbols}, "
+            f"deposit_pct={profile.deposit_pct:.0%})"
         )
 
-        for uid, engine in self.engines.items():
+    def run(self, interval_seconds: int = 60):
+        if not self.contexts:
+            logger.error("Нет пользователей для запуска")
+            return
+
+        logger.info(
+            f"Запуск {len(self.contexts)} пользователя(ей). "
+            f"Интервал тика: {interval_seconds}s"
+        )
+
+        # Первичный запуск: инициализируем пары и движки для каждого юзера
+        for uid, ctx in self.contexts.items():
             try:
-                engine.start()
+                ctx.sync_engines()
+                logger.info(
+                    f"[{uid}] Запущено {len(ctx.engines)} движков: "
+                    f"{list(ctx.engines.keys())}"
+                )
             except Exception as e:
-                logger.error(f"Failed to start engine for '{uid}': {e}")
+                logger.error(f"[{uid}] Ошибка при инициализации: {e}", exc_info=True)
 
+        # Главный цикл
         while not self._stop_event.is_set():
-            for uid, engine in list(self.engines.items()):
-                if not engine.is_running:
-                    continue
-                try:
-                    result = engine.tick()
-                    self._log_tick_result(uid, result)
-                except Exception as e:
-                    logger.error(f"Tick error for '{uid}': {e}", exc_info=True)
+            self._global_tick += 1
 
-            # Ждём следующий тик кусочками по 1 сек — так Ctrl+C реагирует мгновенно
+            for uid, ctx in list(self.contexts.items()):
+                # Проверяем, нужно ли обновить список пар (каждые 24ч)
+                if ctx.scanner and ctx.scanner.should_refresh():
+                    logger.info(f"[{uid}] Обновляем список пар (прошло 24ч)...")
+                    try:
+                        ctx.scanner.force_refresh()
+                        ctx.sync_engines()
+                        logger.info(
+                            f"[{uid}] Новые пары: {list(ctx.engines.keys())}"
+                        )
+                    except Exception as e:
+                        logger.error(f"[{uid}] Ошибка обновления пар: {e}")
+
+                # Тик по всем движкам пользователя
+                tick_results = ctx.tick_all()
+                for sym, result in tick_results.items():
+                    self._log_tick_result(uid, sym, result)
+
+                # Telegram: периодический саммари
+                if (
+                    self.notifier
+                    and self._tick_summary_interval > 0
+                    and self._global_tick % self._tick_summary_interval == 0
+                ):
+                    self._send_summary(uid, ctx)
+
+            # Ждём следующий тик (по 1 сек — мгновенный Ctrl+C)
             for _ in range(interval_seconds):
                 if self._stop_event.is_set():
                     break
-                try:
-                    self._stop_event.wait(timeout=1)
-                except KeyboardInterrupt:
-                    self._stop_event.set()
-                    break
+                self._stop_event.wait(timeout=1)
 
         self._shutdown()
 
     def _shutdown(self):
-        logger.info("Shutting down all engines...")
-        for uid, engine in self.engines.items():
+        logger.info("Остановка всех движков...")
+        for uid, ctx in self.contexts.items():
             try:
-                engine.stop()
-                logger.info(f"Engine '{uid}' stopped")
+                ctx.stop_all()
+                logger.info(f"[{uid}] Все движки остановлены")
             except Exception as e:
-                logger.error(f"Error stopping '{uid}': {e}")
+                logger.error(f"[{uid}] Ошибка при остановке: {e}")
 
     def _signal_handler(self, signum, frame):
-        logger.info(f"Signal {signum} received. Stopping gracefully...")
+        logger.info(f"Получен сигнал {signum}. Graceful shutdown...")
         self._stop_event.set()
-        # Повторное нажатие Ctrl+C → принудительный выход
         signal.signal(signal.SIGINT, self._force_exit)
 
     @staticmethod
     def _force_exit(signum, frame):
-        logger.warning("Force exit (double Ctrl+C)")
+        logger.warning("Принудительный выход (двойной Ctrl+C)")
         os._exit(1)
 
-    def _log_tick_result(self, uid: str, result: Dict):
-        if result.get("status") == "ok":
+    def _log_tick_result(self, uid: str, symbol: str, result: Dict):
+        status = result.get("status", "?")
+        if status == "ok":
             market = result.get("market_state", "?")
             price = result.get("price", 0)
             mode = result.get("mode", "?")
             risk = result.get("risk", {})
-            tick_num = result.get("tick", 0)
+            tick = result.get("tick", 0)
             logger.info(
-                f"[{uid}] Tick #{tick_num} | "
+                f"[{uid}:{symbol}] Тик #{tick} | "
                 f"Market={market} | Mode={mode} | Price={price:.4f} | "
                 f"DayPnL={risk.get('daily_pnl_pct', '?')} | "
                 f"DD={risk.get('drawdown_pct', '?')}"
             )
-            # Telegram: периодический саммари
-            if (self.notifier and self._tick_summary_interval > 0
-                    and tick_num % self._tick_summary_interval == 0):
-                self.notifier.notify_tick_summary(
-                    uid, tick_num, price, market, mode,
-                    risk.get("daily_pnl_pct", "?"),
-                    risk.get("drawdown_pct", "?"),
-                )
-        elif result.get("status") == "risk_blocked":
-            logger.warning(f"[{uid}] TRADING BLOCKED BY RISK MANAGER")
+        elif status == "risk_blocked":
+            logger.warning(f"[{uid}:{symbol}] ТОРГОВЛЯ ЗАБЛОКИРОВАНА РИСК-МЕНЕДЖЕРОМ")
         else:
-            logger.debug(f"[{uid}] Tick result: {result.get('status', '?')}")
+            logger.debug(f"[{uid}:{symbol}] Тик: {status}")
 
+    def _send_summary(self, uid: str, ctx: UserContext):
+        """Отправляет сводку по всем парам пользователя в Telegram."""
+        if not ctx.notifier:
+            return
+        pairs_info = ", ".join(ctx.engines.keys()) or "нет активных пар"
+        # Используем первый попавшийся движок для метрик (для совместимости с notifier)
+        for sym, engine in ctx.engines.items():
+            snap = engine._last_snapshot
+            if snap:
+                ctx.notifier.notify_tick_summary(
+                    uid, self._global_tick, snap.close,
+                    snap.state.value, engine._current_mode or "?",
+                    "?", "?",
+                )
+                break
+
+
+# ──────────────────────────────────────────
+#  Вспомогательные функции
+# ──────────────────────────────────────────
 
 def _load_env(filepath: str = ".env"):
     """Загружает переменные из .env файла в os.environ"""
@@ -145,16 +326,19 @@ def _load_env(filepath: str = ".env"):
                 os.environ.setdefault(key, value)
 
 
+# ──────────────────────────────────────────
+#  Точка входа
+# ──────────────────────────────────────────
+
 def main():
     setup_logging("bot.log", "INFO")
     os.makedirs("data", exist_ok=True)
 
-    # Загружаем .env файл
     _load_env()
 
     config = SystemConfig()
 
-    # ── Telegram: настройка из переменных окружения или config ──
+    # ── Telegram ──
     tg_token = os.environ.get("TG_BOT_TOKEN", config.telegram.bot_token)
     tg_chat = os.environ.get("TG_CHAT_ID", config.telegram.chat_id)
     tg_enabled = bool(tg_token and tg_chat)
@@ -171,18 +355,18 @@ def main():
     )
 
     if tg_enabled:
-        logger.info("Telegram notifications ENABLED")
+        logger.info("Telegram уведомления ВКЛЮЧЕНЫ")
     else:
         logger.info(
-            "Telegram notifications DISABLED. "
-            "Set TG_BOT_TOKEN and TG_CHAT_ID env vars to enable."
+            "Telegram уведомления ВЫКЛЮЧЕНЫ. "
+            "Задайте TG_BOT_TOKEN и TG_CHAT_ID для включения."
         )
 
     mgr = UserManager(data_dir="data")
-
     user_ids = mgr.list_users()
+
     if not user_ids:
-        logger.error("No users found in data/users.json")
+        logger.error("Нет пользователей в data/users.json")
         return
 
     runner = MultiUserRunner(config, notifier=notifier)
@@ -192,12 +376,10 @@ def main():
         if not profile:
             continue
 
-        # Пока для безопасности запускаем только testnet
         if not profile.is_testnet:
-            logger.warning(f"Skipping LIVE user '{uid}'")
+            logger.warning(f"Пропускаем LIVE пользователя '{uid}' (только testnet)")
             continue
 
-        # Личный notifier: используем chat_id пользователя если задан, иначе общий
         user_chat_id = profile.telegram_chat_id or config.telegram.chat_id
         user_notifier = TelegramNotifier(
             bot_token=config.telegram.bot_token,
@@ -206,20 +388,18 @@ def main():
         )
 
         try:
-            engine = BotEngine(profile, config, notifier=user_notifier)
-            runner.engines[uid] = engine
-            logger.info(f"Added user '{uid}' to runner")
+            runner.add_user(profile, user_notifier=user_notifier)
         except Exception as e:
-            logger.error(f"Failed to add user '{uid}': {e}")
+            logger.error(f"Ошибка добавления пользователя '{uid}': {e}")
 
-    if not runner.engines:
-        logger.error("No testnet users available to run")
+    if not runner.contexts:
+        logger.error("Нет testnet-пользователей для запуска")
         return
 
     try:
         runner.run(interval_seconds=60)
     except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt caught. Shutting down...")
+        logger.info("KeyboardInterrupt. Завершаем работу...")
         runner._shutdown()
 
 

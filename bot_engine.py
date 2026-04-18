@@ -20,17 +20,34 @@ logger = logging.getLogger(__name__)
 
 class BotEngine:
     """
-    Движок бота для одного пользователя.
+    Движок бота для одного пользователя и одной торговой пары.
 
     Логика:
     1. Каждый тик: загружаем свечи → анализируем рынок
     2. Флэт → GRID
     3. Тренд → TrendBot + EntryBot (параллельно, разный % депозита)
     4. Все действия проверяются через RiskManager
+
+    Параметр symbol переопределяет profile.symbol — это позволяет
+    создавать несколько BotEngine на один профиль (один на каждую пару).
     """
 
     def __init__(self, profile: UserProfile, config: SystemConfig,
-                 notifier: Optional['TelegramNotifier'] = None):
+                 notifier: Optional['TelegramNotifier'] = None,
+                 symbol: Optional[str] = None,
+                 deposit_pct_override: Optional[float] = None):
+        # Если задан symbol — создаём копию профиля с нужной парой
+        if symbol and symbol != profile.symbol:
+            import copy
+            profile = copy.copy(profile)
+            profile.symbol = symbol
+
+        # Если задан deposit_pct_override — применяем (для мультипарного режима)
+        if deposit_pct_override is not None and deposit_pct_override != profile.deposit_pct:
+            import copy
+            profile = copy.copy(profile)
+            profile.deposit_pct = deposit_pct_override
+
         self.profile = profile
         self.config = profile.get_effective_config(config)
 
