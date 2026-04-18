@@ -219,6 +219,11 @@ class TrendStrategy:
         if not order:
             result["reason"] = "order_failed"
             logger.warning(f"[TREND] skip entry | reason={result['reason']}")
+            if self.notifier:
+                self.notifier.notify_order_failed(
+                    self.user_id, "ТРЕНД", side, price,
+                    "place_market_order вернул None — проверь API-ключи, баланс и плечо"
+                )
             return result
 
         # ── Расчёт TP/SL ──

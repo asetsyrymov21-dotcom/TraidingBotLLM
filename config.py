@@ -26,6 +26,7 @@ class MarketAnalyzerConfig:
     adx_trend_threshold: float = 25.0   # ADX > 25 → тренд
     adx_flat_threshold: float = 20.0    # ADX < 20 → флэт
     atr_period: int = 14
+    atr_high_volatility_multiplier: float = 3.0  # ATR > avg_ATR * X → аномальная волатильность
     candle_limit: int = 250             # Кол-во свечей для расчёта
     timeframe: str = "1h"               # Таймфрейм анализа
 

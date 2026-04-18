@@ -88,10 +88,10 @@ class MarketAnalyzer:
         elif state == MarketState.TREND_DOWN:
             trend_dir = -1
 
-        # Аномальная волатильность: ATR > среднего ATR * 3
+        # Аномальная волатильность: ATR > среднего ATR * atr_high_volatility_multiplier
         atr_series = self._atr(highs, lows, closes, self.cfg.atr_period)
         avg_atr = np.mean(atr_series[-50:]) if len(atr_series) >= 50 else atr
-        high_volatility = atr > avg_atr * self.cfg.adx_trend_threshold / 10
+        high_volatility = atr > avg_atr * self.cfg.atr_high_volatility_multiplier
 
         snapshot = MarketSnapshot(
             state=state,
@@ -131,24 +131,23 @@ class MarketAnalyzer:
     ) -> MarketState:
         cfg = self.cfg
 
-        has_trend = adx >= cfg.adx_trend_threshold
-        is_flat   = adx <= cfg.adx_flat_threshold
+        has_trend = adx >= cfg.adx_trend_threshold   # ADX >= 25 → сильный тренд
+        is_flat   = adx <= cfg.adx_flat_threshold    # ADX <= 20 → флэт
 
         if is_flat:
             return MarketState.FLAT
 
         if has_trend:
+            # Тренд подтверждён ADX — определяем направление по EMA
             if ema_fast > ema_slow:
                 return MarketState.TREND_UP
             elif ema_fast < ema_slow:
                 return MarketState.TREND_DOWN
 
-        # Промежуточная зона (20 < ADX < 25) — смотрим EMA
-        if ema_fast > ema_slow * 1.001:
-            return MarketState.TREND_UP
-        elif ema_fast < ema_slow * 0.999:
-            return MarketState.TREND_DOWN
-
+        # Промежуточная зона (20 < ADX < 25):
+        # ADX недостаточно силён для уверенного тренда → считаем флэтом.
+        # EMA50/200 здесь ненадёжны: они медленные и ещё помнят прошлый тренд,
+        # поэтому давали ложный TREND_UP даже в боковике.
         return MarketState.FLAT
 
     # ──────────────────────────────────────────

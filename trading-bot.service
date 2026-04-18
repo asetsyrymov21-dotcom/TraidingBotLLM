@@ -1,0 +1,27 @@
+# ============================================================
+#  trading-bot.service — systemd unit-файл для бота
+#
+#  Установка на VPS (один раз):
+#    sudo cp trading-bot.service /etc/systemd/system/
+#    sudo systemctl daemon-reload
+#    sudo systemctl enable trading-bot
+#    sudo systemctl start trading-bot
+# ============================================================
+
+[Unit]
+Description=Trading Bot
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/TraidingBotLLM
+ExecStart=/usr/bin/python3 main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/root/TraidingBotLLM/logs/bot.log
+StandardError=append:/root/TraidingBotLLM/logs/bot.log
+
+[Install]
+WantedBy=multi-user.target

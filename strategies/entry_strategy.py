@@ -93,7 +93,7 @@ class EntryStrategy:
             f"reason={signal.reason}"
         )
 
-        if signal.confidence < 3:
+        if signal.confidence < 2:
             result["reason"] = f"signal_weak ({signal.confidence}/3): {signal.reason}"
             logger.info(f"[ENTRY] skip entry | reason={result['reason']}")
             return result
@@ -182,20 +182,22 @@ class EntryStrategy:
                 f"mid={bb_mid:.4f} upper={bb_upper:.4f} range={bb_range:.4f}"
             )
 
-            if price <= bb_lower + bb_range * 0.2:
+            # В трендовом режиме используем midpoint как разделитель:
+            # ниже середины → есть пространство для роста → LONG
+            # выше середины → есть пространство для падения → SHORT
+            # (старая логика "нижние 20%" никогда не срабатывала в TREND_UP)
+            if price <= bb_mid:
                 bb_side = "long"
                 bb_signal = True
                 reasons.append(
-                    f"BB lower->LONG (price={price:.2f}, lower={bb_lower:.2f})"
+                    f"BB below mid->LONG (price={price:.2f}, mid={bb_mid:.2f})"
                 )
-            elif price >= bb_upper - bb_range * 0.2:
+            elif price > bb_mid:
                 bb_side = "short"
                 bb_signal = True
                 reasons.append(
-                    f"BB upper->SHORT (price={price:.2f}, upper={bb_upper:.2f})"
+                    f"BB above mid->SHORT (price={price:.2f}, mid={bb_mid:.2f})"
                 )
-            else:
-                reasons.append("BB neutral")
         else:
             reasons.append("BB data missing")
 
@@ -267,6 +269,11 @@ class EntryStrategy:
 
         if not order:
             logger.warning("[ENTRY] skip open | reason=order_failed")
+            if self.notifier:
+                self.notifier.notify_order_failed(
+                    self.user_id, "УМНЫЙ ВХОД", signal.side, price,
+                    "place_market_order вернул None — проверь API-ключи, баланс и плечо"
+                )
             return {"action": "none", "reason": "order_failed", "pnl": 0.0}
 
         if signal.side == "long":

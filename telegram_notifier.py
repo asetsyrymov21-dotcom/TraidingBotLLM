@@ -229,6 +229,16 @@ class TelegramNotifier:
                 f"{text}"
             )
 
+    def notify_order_failed(self, user_id: str, strategy: str, side: str, price: float, reason: str):
+        """Уведомление об ошибке размещения ордера"""
+        self._send_message(
+            f"🚫 <b>Ордер не выставлен [{strategy}]</b>\n"
+            f"👤 {user_id}\n"
+            f"{'🟢' if side == 'long' else '🔴'} {side.upper()} @ {price:.4f}\n"
+            f"❗ Причина: {reason}\n\n"
+            f"💡 <i>Проверь логи (bot.log) и настройки API.</i>"
+        )
+
     # ──────────────────────────────────────────
     #  Стратегия умного входа (Entry)
     # ──────────────────────────────────────────

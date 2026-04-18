@@ -1,0 +1,10 @@
+services:
+  trading-bot:
+    build: .
+    container_name: trading-bot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data       # сохраняет users.json между перезапусками
+      - ./logs:/app/logs       # сохраняет логи
+    environment:
+      - PYTHONUNBUFFERED=1     # логи сразу видны без буферизации
