@@ -76,7 +76,8 @@ class TrendStrategy:
         self.state = TrendBotState()
         self.notifier = notifier
         self.user_id = user_id
-        self.adx_cfg = adx_cfg or ADXConfig()   # пороги ADX-логики
+        # ADX используется только для управления выходами, не для входов
+        self.adx_cfg = adx_cfg or ADXConfig(adx_strong=20.0, adx_weak=15.0)
 
     # ──────────────────────────────────────────
     #  Основной цикл
@@ -187,7 +188,8 @@ class TrendStrategy:
 
         logger.info(
             f"[TREND] find_entry start | state={getattr(snapshot.state, 'value', snapshot.state)} "
-            f"close={snapshot.close} adx_sig={adx_sig} rsi={snapshot.rsi}"
+            f"close={snapshot.close} ema_fast={snapshot.ema_fast:.4f} "
+            f"ema_slow={snapshot.ema_slow:.4f} rsi={snapshot.rsi}"
         )
 
         # ── Фильтр: только торгуем в тренде ──
@@ -196,37 +198,41 @@ class TrendStrategy:
             logger.info(f"[TREND] skip entry | reason={result['reason']}")
             return result
 
-        # ── ADX-фильтр: нет чёткого сигнала → не входим ──
-        if adx_sig not in ("long", "short"):
-            result["reason"] = f"adx_no_entry ({adx_sig})"
+        # ── EMA9/21 crossover — основной сигнал входа ──
+        # Быстро реагирует на разворот, не лагает как ADX на 15m
+        if snapshot.ema_fast > snapshot.ema_slow:
+            ema_side = "long"
+        elif snapshot.ema_fast < snapshot.ema_slow:
+            ema_side = "short"
+        else:
+            result["reason"] = "ema_neutral"
             logger.info(f"[TREND] skip entry | reason={result['reason']}")
             return result
 
-        # Направление по ADX/DI (быстро и точно реагирует на разворот)
-        adx_side = adx_sig   # "long" или "short"
-
-        logger.info(f"[TREND] adx_side selected | adx_side={adx_side}")
-
-        # ── RSI-фильтр (дополнительное подтверждение) ──
-        rsi = snapshot.rsi or 50.0
-        rsi_long_min  = getattr(self.cfg, "rsi_long_min",  45)
-        rsi_short_max = getattr(self.cfg, "rsi_short_max", 55)
-
-        if adx_side == "long" and rsi < rsi_long_min:
-            result["reason"] = f"rsi_below_threshold ({rsi:.2f} < {rsi_long_min})"
-            logger.info(f"[TREND] skip entry | reason={result['reason']}")
-            return result
-
-        if adx_side == "short" and rsi > rsi_short_max:
-            result["reason"] = f"rsi_above_threshold ({rsi:.2f} > {rsi_short_max})"
-            logger.info(f"[TREND] skip entry | reason={result['reason']}")
-            return result
-
-        # ── Определение стороны (WIN/LOSS логика) ──
-        side = self._determine_side(adx_side)
         logger.info(
-            f"[TREND] side determined | adx_side={adx_side} "
-            f"last_result={self.state.last_result} final_side={side}"
+            f"[TREND] ema_side={ema_side} | "
+            f"EMA9={snapshot.ema_fast:.4f} EMA21={snapshot.ema_slow:.4f}"
+        )
+
+        # ── RSI-фильтр (подтверждение импульса) ──
+        rsi = snapshot.rsi or 50.0
+        rsi_long_min  = self.cfg.rsi_long_min
+        rsi_short_max = self.cfg.rsi_short_max
+
+        if ema_side == "long" and rsi < rsi_long_min:
+            result["reason"] = f"rsi_below_min ({rsi:.1f} < {rsi_long_min})"
+            logger.info(f"[TREND] skip entry | reason={result['reason']}")
+            return result
+
+        if ema_side == "short" and rsi > rsi_short_max:
+            result["reason"] = f"rsi_above_max ({rsi:.1f} > {rsi_short_max})"
+            logger.info(f"[TREND] skip entry | reason={result['reason']}")
+            return result
+
+        # ── Определение стороны (следуем EMA crossover) ──
+        side = self._determine_side(ema_side)
+        logger.info(
+            f"[TREND] side determined | ema_side={ema_side} final_side={side}"
         )
 
         # ── Расчёт размера позиции ──
@@ -293,9 +299,12 @@ class TrendStrategy:
     # ──────────────────────────────────────────
 
     def _determine_side(self, trend_side: str) -> str:
-        """WIN → продолжаем тренд, LOSS → переворот"""
-        if self.state.last_result == TradeResult.LOSS:
-            return "short" if trend_side == "long" else "long"
+        """
+        Всегда следуем направлению ADX/DI.
+        Раньше была логика LOSS→переворот, но она открывала позиции
+        против тренда (ADX говорит short, бот открывал long после убытка).
+        ADX+DI — первичный сигнал, он отражает реальную динамику рынка.
+        """
         return trend_side
 
     def _calc_dynamic_size(self, price: float) -> float:

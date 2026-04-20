@@ -157,6 +157,14 @@ def adx_signal(
         if bearish:
             return "short"
 
+    # ADX падает, но ещё силён + DI очень чётко показывает направление → входим
+    # (бывает при продолжении тренда после пика ADX, -DI доминирует)
+    if is_strong and adx_falling and is_strong_di:
+        if bullish:
+            return "long"
+        if bearish:
+            return "short"
+
     # ADX силён, но не растёт и позиция открыта → держим
     if is_strong and not adx_rising and position != "none":
         return "hold"

@@ -151,46 +151,38 @@ class MarketAnalyzer:
         """
         Определяет режим рынка: TREND_UP / TREND_DOWN / FLAT.
 
-        Логика (3-факторная):
-        1. ADX — сила тренда (< flat_threshold → сразу FLAT)
-        2. +DI vs -DI — ТЕКУЩЕЕ давление (покупатели vs продавцы).
-           Реагирует быстро, не страдает от лага EMA200.
-        3. Наклон EMA50 — подтверждение направления за последние ~5 свечей.
+        Логика (быстрая, для 15m таймфрейма):
+        1. ADX — минимальный фильтр шума (< 15 → FLAT, не торгуем)
+        2. EMA9 vs EMA21 crossover — основной сигнал направления.
+           Быстро реагирует (9/21 свечи), в отличие от EMA50/200.
+        3. Наклон EMA9 — подтверждение что движение реальное, не флуктуация.
 
-        Для признания TREND нужно: ADX сильный И +DI/-DI согласны И EMA50 наклонена туда же.
-        Если хотя бы одно условие не выполнено — FLAT (лучше пропустить вход, чем войти в ложный тренд).
+        ADX не используется как жёсткий порог тренда — на 15m он часто
+        запаздывает. EMA crossover реагирует на 3-5 свечей раньше.
         """
         cfg = self.cfg
 
-        # ── 1. ADX: достаточно ли тренда? ──
-        if adx <= cfg.adx_flat_threshold:
+        # ── 1. ADX: фильтр минимального шума ──
+        # Только отсекаем полный боковик, не требуем "сильный тренд"
+        if adx < cfg.adx_flat_threshold:
             return MarketState.FLAT
 
-        if adx < cfg.adx_trend_threshold:
-            # Промежуточная зона — консервативно считаем флэтом
-            return MarketState.FLAT
+        # ── 2. EMA9 vs EMA21: основной сигнал ──
+        ema_bullish = ema_fast > ema_slow   # EMA9 выше EMA21 → бычий импульс
+        ema_bearish = ema_fast < ema_slow   # EMA9 ниже EMA21 → медвежий импульс
 
-        # ── 2. ADX >= 25: тренд есть, определяем направление ──
-        # +DI > -DI → преобладают покупатели (потенциальный UP)
-        # -DI > +DI → преобладают продавцы  (потенциальный DOWN)
-        di_bullish = plus_di > minus_di
-        di_bearish = minus_di > plus_di
-
-        # ── 3. Наклон EMA50 за ~5 свечей (подтверждение) ──
-        # Небольшой порог 0.0001 отсеивает "почти горизонтальные" EMA
-        slope_up   = ema_fast_slope >  0.0001
-        slope_down = ema_fast_slope < -0.0001
+        # ── 3. Наклон EMA9 за последние ~5 свечей (подтверждение) ──
+        slope_up   = ema_fast_slope >  0.00005   # ослаблен порог для 15m
+        slope_down = ema_fast_slope < -0.00005
 
         # ── 4. Финальное решение ──
-        # TREND_UP:   +DI доминирует И EMA50 растёт
-        if di_bullish and slope_up:
+        if ema_bullish and slope_up:
             return MarketState.TREND_UP
 
-        # TREND_DOWN: -DI доминирует И EMA50 падает
-        if di_bearish and slope_down:
+        if ema_bearish and slope_down:
             return MarketState.TREND_DOWN
 
-        # Сигналы противоречат друг другу → FLAT (неопределённость)
+        # EMA перекрещены, но наклон не подтверждает — нейтраль
         return MarketState.FLAT
 
     # ──────────────────────────────────────────

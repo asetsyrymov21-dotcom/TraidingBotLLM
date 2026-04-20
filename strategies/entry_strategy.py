@@ -177,26 +177,39 @@ class EntryStrategy:
 
         if bb_upper and bb_lower and bb_mid:
             bb_range = bb_upper - bb_lower
+            # Зона "у края" = последние 20% полосы
+            edge_pct = 0.20
+            lower_edge = bb_lower + bb_range * edge_pct   # нижние 20% → LONG
+            upper_edge = bb_upper - bb_range * edge_pct   # верхние 20% → SHORT
+
             logger.info(
                 f"[ENTRY] BB check | price={price:.4f} lower={bb_lower:.4f} "
-                f"mid={bb_mid:.4f} upper={bb_upper:.4f} range={bb_range:.4f}"
+                f"lower_edge={lower_edge:.4f} upper_edge={upper_edge:.4f} "
+                f"upper={bb_upper:.4f} range={bb_range:.4f}"
             )
 
-            # В трендовом режиме используем midpoint как разделитель:
-            # ниже середины → есть пространство для роста → LONG
-            # выше середины → есть пространство для падения → SHORT
-            # (старая логика "нижние 20%" никогда не срабатывала в TREND_UP)
-            if price <= bb_mid:
+            # Трендовая логика BB: голосуем только у краёв полосы.
+            # Цена у нижней границы → перепродан → LONG
+            # Цена у верхней границы → перекуплен → SHORT
+            # В середине полосы — нейтрально (не мешаем RSI+MACD)
+            if price <= lower_edge:
                 bb_side = "long"
                 bb_signal = True
                 reasons.append(
-                    f"BB below mid->LONG (price={price:.2f}, mid={bb_mid:.2f})"
+                    f"BB near lower band->LONG (price={price:.2f}, edge={lower_edge:.2f})"
                 )
-            elif price > bb_mid:
+            elif price >= upper_edge:
                 bb_side = "short"
                 bb_signal = True
                 reasons.append(
-                    f"BB above mid->SHORT (price={price:.2f}, mid={bb_mid:.2f})"
+                    f"BB near upper band->SHORT (price={price:.2f}, edge={upper_edge:.2f})"
+                )
+            else:
+                bb_side = "neutral"
+                bb_signal = False
+                reasons.append(
+                    f"BB mid-zone->neutral (price={price:.2f}, "
+                    f"range=[{lower_edge:.2f}–{upper_edge:.2f}])"
                 )
         else:
             reasons.append("BB data missing")
