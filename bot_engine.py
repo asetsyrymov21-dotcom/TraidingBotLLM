@@ -197,55 +197,22 @@ class BotEngine:
         result["mode"] = self._current_mode
 
         # ── 4. Тик активной стратегии ──
-        if self._current_mode == "grid":
-            trend_has_pos = self.trend_bot.state.position is not None
-            entry_has_pos = self.entry_bot.position is not None
-
-            if trend_has_pos or entry_has_pos:
-                # Есть открытые позиции от предыдущего тренд-режима.
-                # Управляем ими (только TP/SL, новые позиции не открываем),
-                # grid не запускаем пока они не закроются.
-                if trend_has_pos:
-                    trend_result = self.trend_bot.tick(snapshot)
-                    result["actions"]["trend_manage"] = trend_result
-
-                if entry_has_pos:
-                    entry_result = self.entry_bot.tick(snapshot)
-                    result["actions"]["entry_manage"] = entry_result
-
-                result["actions"]["grid"] = {
-                    "action": "pending",
-                    "reason": "waiting_for_trend_positions_to_close",
-                }
-
-                # Если позиции только что закрылись — инициализируем grid
-                if not self.trend_bot.state.position and not self.entry_bot.position:
-                    logger.info(
-                        f"[BOT:{self.profile.user_id}] Trend positions closed. "
-                        f"Setting up GRID now."
-                    )
-                    success = self.grid_bot.setup(snapshot)
-                    if not success:
-                        logger.error(
-                            f"[BOT:{self.profile.user_id}] Failed to setup GRID after transition"
-                        )
-            else:
-                # Нет открытых тренд-позиций — работаем в штатном grid-режиме
-                grid_result = self.grid_bot.tick(snapshot)
-                result["actions"]["grid"] = grid_result
-
-        elif self._current_mode == "trend":
+        if self._current_mode == "trend":
+            # Только TrendStrategy. EntryStrategy отключена.
             trend_result = self.trend_bot.tick(snapshot)
-            entry_result = self.entry_bot.tick(snapshot)
             result["actions"]["trend"] = trend_result
-            result["actions"]["entry"] = entry_result
 
-            # Логируем завершённые сделки в риск-менеджер
-            for r in [trend_result, entry_result]:
-                if r.get("action", "").startswith("close_"):
-                    strategy_name = "trend" if r is trend_result else "entry"
-                    # NOTE: В production передавать реальные цены из ордера
-                    pass
+        elif self._current_mode == "wait":
+            # Флэт / неопределённость — ждём без сделок.
+            # Если есть открытая позиция от предыдущего тренда — управляем ею.
+            if self.trend_bot.state.position is not None:
+                trend_result = self.trend_bot.tick(snapshot)
+                result["actions"]["trend_manage"] = trend_result
+            else:
+                result["actions"]["wait"] = {"action": "waiting", "reason": "flat_market"}
+                logger.debug(
+                    f"[BOT:{self.profile.user_id}] Флэт — ожидаем тренд"
+                )
 
         result["status"] = "ok"
         return result
@@ -255,12 +222,11 @@ class BotEngine:
     # ──────────────────────────────────────────
 
     def _determine_mode(self, snapshot: MarketSnapshot) -> str:
-        """Определяет нужный режим на основе состояния рынка"""
-        if snapshot.state == MarketState.FLAT:
-            return "grid"
-        elif snapshot.state in (MarketState.TREND_UP, MarketState.TREND_DOWN):
+        """Определяет нужный режим на основе состояния рынка.
+        Grid отключён — на флэте просто ждём, не торгуем."""
+        if snapshot.state in (MarketState.TREND_UP, MarketState.TREND_DOWN):
             return "trend"
-        return self._current_mode or "grid"
+        return "wait"  # флэт / UNKNOWN → ожидание без сделок
 
     def _has_open_trend_positions(self) -> bool:
         """Проверяет есть ли открытые позиции от трендовых стратегий"""
@@ -270,39 +236,19 @@ class BotEngine:
         )
 
     def _switch_mode(self, snapshot: MarketSnapshot, new_mode: str):
-        """Переключает стратегию, корректно завершая предыдущую"""
+        """Переключает режим. Grid отключён — только trend / wait."""
         logger.info(
             f"[BOT:{self.profile.user_id}] MODE SWITCH: "
             f"{self._current_mode} -> {new_mode} | {snapshot.state.value}"
         )
 
-        if self._current_mode == "grid":
-            # Grid: снимаем лимитные ордера, позиций нет
-            self.grid_bot.teardown()
-
-        elif self._current_mode == "trend":
-            # Trend → НЕ закрываем принудительно.
-            # Открытые позиции дойдут до TP или SL сами.
-            # bot_engine продолжит вызывать tick для управления ими
-            # даже находясь в режиме grid (см. tick()).
-            if self._has_open_trend_positions():
+        if self._current_mode == "trend" and new_mode == "wait":
+            # Уходим во флэт — НЕ закрываем позицию принудительно.
+            # Она дойдёт до TP или SL сама (управление продолжается в tick).
+            if self.trend_bot.state.position is not None:
                 logger.info(
-                    f"[BOT:{self.profile.user_id}] Trend positions still open — "
-                    f"will manage until TP/SL, no force close"
-                )
-
-        # Инициализируем новый режим
-        if new_mode == "grid":
-            if not self._has_open_trend_positions():
-                # Нет открытых позиций — сразу ставим сетку
-                success = self.grid_bot.setup(snapshot)
-                if not success:
-                    logger.error(f"[BOT:{self.profile.user_id}] Failed to setup GRID")
-            else:
-                # Есть открытые позиции — откладываем grid setup до их закрытия
-                logger.info(
-                    f"[BOT:{self.profile.user_id}] Grid setup deferred — "
-                    f"waiting for trend positions to close via TP/SL"
+                    f"[BOT:{self.profile.user_id}] Switching to wait — "
+                    f"trend position will close via TP/SL naturally"
                 )
 
     def _emergency_close(self):

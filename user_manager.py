@@ -137,6 +137,8 @@ class UserManager:
                 "api_key": p.api_key,       # В production: зашифровать
                 "api_secret": p.api_secret,  # В production: зашифровать
                 "symbol": p.symbol,
+                "symbols": p.symbols,
+                "top_n_symbols": p.top_n_symbols,
                 "leverage": p.leverage,
                 "deposit_pct": p.deposit_pct,
                 "commission_pct": p.commission_pct,
@@ -162,6 +164,8 @@ class UserManager:
                     api_key=d["api_key"],
                     api_secret=d["api_secret"],
                     symbol=d.get("symbol", "BTC/USDT"),
+                    symbols=d.get("symbols", []),
+                    top_n_symbols=d.get("top_n_symbols", 5),
                     leverage=d.get("leverage", 3),
                     deposit_pct=d.get("deposit_pct", 0.10),
                     commission_pct=d.get("commission_pct", 0.20),

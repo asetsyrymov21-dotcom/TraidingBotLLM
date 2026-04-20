@@ -376,9 +376,10 @@ def main():
         if not profile:
             continue
 
-        if not profile.is_testnet:
-            logger.warning(f"Пропускаем LIVE пользователя '{uid}' (только testnet)")
-            continue
+        if profile.is_testnet:
+            logger.info(f"Пользователь '{uid}' — TESTNET режим")
+        else:
+            logger.warning(f"Пользователь '{uid}' — LIVE режим (реальные деньги!)")
 
         user_chat_id = profile.telegram_chat_id or config.telegram.chat_id
         user_notifier = TelegramNotifier(
@@ -396,8 +397,13 @@ def main():
         logger.error("Нет testnet-пользователей для запуска")
         return
 
+    # Интервал тика = 15 минут (соответствует таймфрейму 15m)
+    # Можно переопределить через env: TICK_INTERVAL_SEC=60
+    tick_interval = int(os.environ.get("TICK_INTERVAL_SEC", 900))
+    logger.info(f"Интервал тика: {tick_interval}s")
+
     try:
-        runner.run(interval_seconds=60)
+        runner.run(interval_seconds=tick_interval)
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt. Завершаем работу...")
         runner._shutdown()

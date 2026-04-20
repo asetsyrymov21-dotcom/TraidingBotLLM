@@ -42,6 +42,8 @@ class MarketSnapshot:
     bb_upper: Optional[float] = None
     bb_lower: Optional[float] = None
     bb_mid: Optional[float] = None
+    volume: float = 0.0                # Объём последней свечи
+    avg_volume: float = 0.0            # Средний объём за N свечей (из конфига)
 
 
 class MarketAnalyzer:
@@ -66,9 +68,10 @@ class MarketAnalyzer:
             logger.warning(f"Not enough candles: {len(ohlcv)} < {self.cfg.ema_slow + 10}")
             return None
 
-        closes = np.array([c[4] for c in ohlcv], dtype=float)
-        highs  = np.array([c[2] for c in ohlcv], dtype=float)
-        lows   = np.array([c[3] for c in ohlcv], dtype=float)
+        closes  = np.array([c[4] for c in ohlcv], dtype=float)
+        highs   = np.array([c[2] for c in ohlcv], dtype=float)
+        lows    = np.array([c[3] for c in ohlcv], dtype=float)
+        volumes = np.array([c[5] for c in ohlcv], dtype=float)
 
         ema_fast_arr = self._ema(closes, self.cfg.ema_fast)
         ema_slow_arr = self._ema(closes, self.cfg.ema_slow)
@@ -89,6 +92,13 @@ class MarketAnalyzer:
 
         close = closes[-1]
         atr_pct = atr / close
+
+        # Объём последней свечи и средний объём за volume_filter_period свечей
+        current_volume = float(volumes[-1])
+        vol_period = self.cfg.volume_filter_period
+        # Среднее считаем по предыдущим свечам (исключаем текущую, чтобы не было look-ahead)
+        avg_vol_window = volumes[-(vol_period + 1):-1] if len(volumes) > vol_period else volumes[:-1]
+        avg_volume = float(np.mean(avg_vol_window)) if len(avg_vol_window) > 0 else 0.0
 
         # Наклон EMA50 за последние 5 свечей (в % от цены)
         ema_fast_slope = (ema_fast_arr[-1] - ema_fast_arr[-6]) / close if len(ema_fast_arr) >= 6 else 0.0
@@ -125,12 +135,15 @@ class MarketAnalyzer:
             bb_upper=bb_upper,
             bb_mid=bb_mid,
             bb_lower=bb_lower,
+            volume=current_volume,
+            avg_volume=avg_volume,
         )
         logger.info(
             f"Market: {state.value} | Close={close:.4f} | "
-            f"EMA50={ema_fast:.2f} EMA200={ema_slow:.2f} | "
+            f"EMA9={ema_fast:.2f} EMA21={ema_slow:.2f} | "
             f"ADX={adx:.1f} +DI={plus_di:.1f} -DI={minus_di:.1f} | "
-            f"ATR={atr:.4f} ({atr_pct*100:.2f}%) | RSI={rsi:.1f}"
+            f"ATR={atr:.4f} ({atr_pct*100:.2f}%) | RSI={rsi:.1f} | "
+            f"Vol={current_volume:.0f} AvgVol={avg_volume:.0f}"
         )
         return snapshot
 

@@ -37,6 +37,9 @@ class ActivePosition:
     sl_price: float
     order_id: Optional[str] = None
     open_time: float = field(default_factory=time.time)
+    best_price: float = 0.0                 # Лучшая цена за время жизни позиции
+    trail_stop_price: Optional[float] = None  # Текущий уровень trailing stop
+    trail_active: bool = False              # Trailing stop активирован?
 
 
 @dataclass
@@ -163,6 +166,24 @@ class TrendStrategy:
             result.update({"action": f"close_{adx_sig}", "pnl": pnl, "reason": adx_sig})
             return result
 
+        # ── Обновление Trailing Stop ──
+        self._update_trailing_stop(pos, price)
+
+        # ── Проверка Trailing Stop (если активирован) ──
+        if pos.trail_active and pos.trail_stop_price is not None:
+            triggered = (
+                (pos.side == "long"  and price <= pos.trail_stop_price) or
+                (pos.side == "short" and price >= pos.trail_stop_price)
+            )
+            if triggered:
+                logger.info(
+                    f"[TREND] TRAIL STOP triggered | {pos.side.upper()} @ {price:.4f} | "
+                    f"trail_stop={pos.trail_stop_price:.4f} best={pos.best_price:.4f}"
+                )
+                pnl = self._close_position(price, "trail_stop")
+                result.update({"action": "close_trail_stop", "pnl": pnl, "reason": "trail_stop"})
+                return result
+
         # ── Проверка TP ──
         if (pos.side == "long" and price >= pos.tp_price) or (
             pos.side == "short" and price <= pos.tp_price
@@ -171,15 +192,15 @@ class TrendStrategy:
             result.update({"action": "close_tp", "pnl": pnl})
             return result
 
-        # ── Проверка SL ──
-        if (pos.side == "long" and price <= pos.sl_price) or (
-            pos.side == "short" and price >= pos.sl_price
-        ):
-            pnl = self._close_position(price, "sl")
-            result.update({"action": "close_sl", "pnl": pnl})
-            # После SL → переворот через задержку
-            result["reverse_signal"] = "short" if pos.side == "long" else "long"
-            return result
+        # ── Проверка SL (только если trailing ещё не активирован) ──
+        if not pos.trail_active:
+            if (pos.side == "long" and price <= pos.sl_price) or (
+                pos.side == "short" and price >= pos.sl_price
+            ):
+                pnl = self._close_position(price, "sl")
+                result.update({"action": "close_sl", "pnl": pnl})
+                result["reverse_signal"] = "short" if pos.side == "long" else "long"
+                return result
 
         return result
 
@@ -229,6 +250,14 @@ class TrendStrategy:
             logger.info(f"[TREND] skip entry | reason={result['reason']}")
             return result
 
+        # ── Фильтр объёма: свеча должна быть активнее среднего ──
+        if snapshot.avg_volume > 0 and snapshot.volume <= snapshot.avg_volume:
+            result["reason"] = (
+                f"low_volume ({snapshot.volume:.0f} <= avg {snapshot.avg_volume:.0f})"
+            )
+            logger.info(f"[TREND] skip entry | reason={result['reason']}")
+            return result
+
         # ── Определение стороны (следуем EMA crossover) ──
         side = self._determine_side(ema_side)
         logger.info(
@@ -274,6 +303,7 @@ class TrendStrategy:
             tp_price=tp_price,
             sl_price=sl_price,
             order_id=order.get("id"),
+            best_price=price,   # Начальное значение — цена входа
         )
         self.state.trade_count += 1
 
@@ -389,6 +419,46 @@ class TrendStrategy:
 
         self.state.position = None
         return pnl
+
+    def _update_trailing_stop(self, pos: ActivePosition, price: float) -> None:
+        """
+        Обновляет trailing stop по лучшей цене.
+        Активируется когда прибыль >= trail_activate_pct.
+        После активации trailing stop только подтягивается в сторону прибыли.
+        """
+        trail_pct      = self.cfg.trail_pct
+        activate_pct   = self.cfg.trail_activate_pct
+
+        if pos.side == "long":
+            # Обновляем лучшую цену
+            if price > pos.best_price:
+                pos.best_price = price
+            # Активируем trailing при достаточной прибыли
+            if pos.best_price >= pos.entry_price * (1 + activate_pct):
+                pos.trail_active = True
+                new_trail = pos.best_price * (1 - trail_pct)
+                # Trailing stop движется только вверх
+                if pos.trail_stop_price is None or new_trail > pos.trail_stop_price:
+                    pos.trail_stop_price = new_trail
+                    logger.debug(
+                        f"[TRAIL] LONG trail updated: best={pos.best_price:.4f} "
+                        f"trail_stop={pos.trail_stop_price:.4f}"
+                    )
+        else:  # short
+            # Для шорта лучшая цена — минимальная
+            if pos.best_price == 0.0 or price < pos.best_price:
+                pos.best_price = price
+            # Активируем trailing при достаточной прибыли
+            if pos.best_price <= pos.entry_price * (1 - activate_pct):
+                pos.trail_active = True
+                new_trail = pos.best_price * (1 + trail_pct)
+                # Trailing stop движется только вниз
+                if pos.trail_stop_price is None or new_trail < pos.trail_stop_price:
+                    pos.trail_stop_price = new_trail
+                    logger.debug(
+                        f"[TRAIL] SHORT trail updated: best={pos.best_price:.4f} "
+                        f"trail_stop={pos.trail_stop_price:.4f}"
+                    )
 
     def _check_squeeze(self, pos: ActivePosition, price: float) -> bool:
         """Анти-сквиз: цена резко движется против позиции"""

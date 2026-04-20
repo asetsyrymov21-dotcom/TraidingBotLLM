@@ -29,6 +29,7 @@ class MarketAnalyzerConfig:
     atr_high_volatility_multiplier: float = 3.0  # ATR > avg_ATR * X → аномальная волатильность
     candle_limit: int = 200             # Кол-во свечей для расчёта
     timeframe: str = "15m"              # Таймфрейм анализа
+    volume_filter_period: int = 20      # Средний объём за N свечей для фильтра входа
 
 
 @dataclass
@@ -44,8 +45,10 @@ class GridConfig:
 @dataclass
 class TrendBotConfig:
     """Параметры трендового бота"""
-    tp_pct: float = 0.018              # Take Profit 1.8%
-    sl_pct: float = 0.011              # Stop Loss 1.1%
+    tp_pct: float = 0.012              # Take Profit 1.2% (под 15m таймфрейм)
+    sl_pct: float = 0.007              # Stop Loss 0.7%  (под 15m таймфрейм)
+    trail_pct: float = 0.006           # Trailing Stop: отступ от лучшей цены 0.6%
+    trail_activate_pct: float = 0.004  # Trailing активируется при прибыли 0.4%
     base_position_pct: float = 0.05    # Базовый размер позиции 5%
     max_position_pct: float = 0.15     # Макс позиция 15%
     min_position_pct: float = 0.02     # Мин позиция 2%
