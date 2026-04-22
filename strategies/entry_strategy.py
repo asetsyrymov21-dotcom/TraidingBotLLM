@@ -307,9 +307,22 @@ class EntryStrategy:
 
         # Telegram: открыта позиция умного входа
         if self.notifier:
+            # Определяем состояние MACD (выше/ниже сигнальной линии)
+            macd_above: Optional[bool] = None
+            if snapshot.macd_line is not None and snapshot.macd_signal is not None:
+                macd_above = snapshot.macd_line > snapshot.macd_signal
+
+            # Определяем положение цены относительно BB midband
+            bb_above_mid: Optional[bool] = None
+            if snapshot.bb_mid is not None:
+                bb_above_mid = snapshot.close > snapshot.bb_mid
+
             self.notifier.notify_entry_open(
                 self.user_id, signal.side, price, amount, tp, sl,
                 signal.reason, signal.confidence,
+                rsi=snapshot.rsi,
+                macd_above=macd_above,
+                bb_above_mid=bb_above_mid,
             )
 
         return {

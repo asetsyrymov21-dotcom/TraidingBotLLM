@@ -262,8 +262,43 @@ class TelegramNotifier:
         sl: float,
         signal_reason: str,
         confidence: int,
+        rsi: Optional[float] = None,
+        macd_above: Optional[bool] = None,
+        bb_above_mid: Optional[bool] = None,
     ):
         side_emoji = "🟢 LONG" if side == "long" else "🔴 SHORT"
+        direction = "вверх" if side == "long" else "вниз"
+
+        # Объясняем каждый индикатор человеческим языком
+        explanations = []
+
+        if rsi is not None:
+            if side == "long":
+                explanations.append(
+                    f"RSI = {rsi:.1f} — выше 50, рынок бычий → сигнал на покупку"
+                )
+            else:
+                explanations.append(
+                    f"RSI = {rsi:.1f} — ниже 50, рынок медвежий → сигнал на продажу"
+                )
+
+        if macd_above is not None:
+            if macd_above:
+                explanations.append("MACD — линия выше сигнальной, импульс направлен вверх")
+            else:
+                explanations.append("MACD — линия ниже сигнальной, импульс направлен вниз")
+
+        if bb_above_mid is not None:
+            if bb_above_mid:
+                explanations.append("Цена выше средней полосы BB → тренд восходящий")
+            else:
+                explanations.append("Цена ниже средней полосы BB → тренд нисходящий")
+
+        bullets = "\n".join(f"• {e}" for e in explanations) if explanations else signal_reason
+
+        conf_text = {3: "все 3/3 индикатора совпали", 2: "2/3 индикатора совпали"}.get(
+            confidence, f"{confidence}/3 индикатора"
+        )
 
         self._send_message(
             f"🧠 <b>УМНЫЙ ВХОД: Открыта позиция</b>\n"
@@ -271,9 +306,9 @@ class TelegramNotifier:
             f"🔹 {side_emoji} @ {price:.4f}\n"
             f"📦 Размер: {amount}\n"
             f"🎯 TP: {tp:.4f} (+{abs(tp/price - 1)*100:.1f}%)\n"
-            f"🛑 SL: {sl:.4f} (-{abs(sl/price - 1)*100:.1f}%)\n"
-            f"📊 Уверенность: {confidence}/3\n\n"
-            f"💡 <i>Сигналы: {signal_reason}</i>"
+            f"🛑 SL: {sl:.4f} (-{abs(sl/price - 1)*100:.1f}%)\n\n"
+            f"💡 <i>Почему {side.upper()} ({conf_text}):</i>\n"
+            f"{bullets}"
         )
 
     def notify_entry_close(
