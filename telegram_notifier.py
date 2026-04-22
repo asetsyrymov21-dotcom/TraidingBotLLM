@@ -33,6 +33,11 @@ class TelegramNotifier:
         self.chat_id = chat_id
         self.enabled = enabled
         self._base_url = f"https://api.telegram.org/bot{bot_token}"
+        self._last_balance: Optional[float] = None   # Обновляется из BotEngine каждый тик
+
+    def update_balance(self, balance: float):
+        """Обновляет текущий баланс — добавляется в конец каждого сообщения"""
+        self._last_balance = balance
 
     # ──────────────────────────────────────────
     #  Низкоуровневая отправка
@@ -42,6 +47,10 @@ class TelegramNotifier:
         """Отправляет сообщение в Telegram (в отдельном потоке)"""
         if not self.enabled or not self.bot_token or not self.chat_id:
             return
+
+        # Добавляем баланс в конец каждого сообщения
+        if self._last_balance is not None:
+            text += f"\n\n💼 <b>Баланс: {self._last_balance:.2f} USDT</b>"
 
         def _do_send():
             try:

@@ -11,7 +11,7 @@ from typing import Optional, Dict
 from config import SystemConfig, UserProfile
 from exchange import ExchangeConnector
 from market_analyzer import MarketAnalyzer, MarketState, MarketSnapshot
-from strategies import GridStrategy, TrendStrategy, EntryStrategy
+from strategies import TrendStrategy, EntryStrategy
 from risk_manager import RiskManager
 from telegram_notifier import TelegramNotifier
 
@@ -24,8 +24,8 @@ class BotEngine:
 
     Логика:
     1. Каждый тик: загружаем свечи → анализируем рынок
-    2. Флэт → GRID
-    3. Тренд → TrendBot + EntryBot (параллельно, разный % депозита)
+    2. Тренд → TrendBot (основная стратегия)
+    3. Флэт → ожидание (wait), позиция дожидается TP/SL
     4. Все действия проверяются через RiskManager
 
     Параметр symbol переопределяет profile.symbol — это позволяет
@@ -63,12 +63,11 @@ class BotEngine:
         )
 
         # Стратегии (передаём notifier)
-        self.grid_bot = GridStrategy(self.exchange, self.config.grid, notifier=notifier, user_id=profile.user_id)
         self.trend_bot = TrendStrategy(self.exchange, self.config.trend_bot, notifier=notifier, user_id=profile.user_id)
         self.entry_bot = EntryStrategy(self.exchange, self.config.entry_bot, notifier=notifier, user_id=profile.user_id)
 
         # Состояние
-        self._current_mode: Optional[str] = None  # "grid" / "trend" / None
+        self._current_mode: Optional[str] = None  # "trend" / "wait" / None
         self._last_snapshot: Optional[MarketSnapshot] = None
         self._tick_count: int = 0
         self._running: bool = False
@@ -104,9 +103,7 @@ class BotEngine:
         self._running = False
 
         # Закрываем все стратегии
-        if self._current_mode == "grid":
-            self.grid_bot.teardown()
-        elif self._current_mode == "trend":
+        if self._current_mode == "trend":
             self.trend_bot.force_close()
             self.entry_bot.force_close()
 
@@ -154,6 +151,8 @@ class BotEngine:
 
         # ── 2. Проверка риск-лимитов ──
         balance = self.exchange.fetch_balance()
+        if self.notifier:
+            self.notifier.update_balance(balance["total"])
         risk_report = self.risk_mgr.check_can_trade(balance["total"])
         result["risk"] = {
             "can_trade": risk_report.can_trade,
@@ -223,7 +222,7 @@ class BotEngine:
 
     def _determine_mode(self, snapshot: MarketSnapshot) -> str:
         """Определяет нужный режим на основе состояния рынка.
-        Grid отключён — на флэте просто ждём, не торгуем."""
+        На флэте ждём тренд, не торгуем."""
         if snapshot.state in (MarketState.TREND_UP, MarketState.TREND_DOWN):
             return "trend"
         return "wait"  # флэт / UNKNOWN → ожидание без сделок
@@ -236,7 +235,7 @@ class BotEngine:
         )
 
     def _switch_mode(self, snapshot: MarketSnapshot, new_mode: str):
-        """Переключает режим. Grid отключён — только trend / wait."""
+        """Переключает режим: trend / wait."""
         logger.info(
             f"[BOT:{self.profile.user_id}] MODE SWITCH: "
             f"{self._current_mode} -> {new_mode} | {snapshot.state.value}"
@@ -254,8 +253,6 @@ class BotEngine:
     def _emergency_close(self):
         """Экстренное закрытие всех позиций"""
         logger.warning(f"[BOT:{self.profile.user_id}] EMERGENCY CLOSE")
-        if self._current_mode == "grid":
-            self.grid_bot.teardown()
         self.exchange.cancel_all_orders()
         self.exchange.close_all_positions()
         self._current_mode = None
@@ -280,7 +277,6 @@ class BotEngine:
             "risk": self.risk_mgr.get_session_stats(),
             "trend_bot": self.trend_bot.get_stats(),
             "entry_bot": self.entry_bot.get_stats(),
-            "grid_bot": self.grid_bot.get_stats(),
             "market": {
                 "state": (
                     self._last_snapshot.state.value
