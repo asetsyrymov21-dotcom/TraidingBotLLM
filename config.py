@@ -93,7 +93,7 @@ class TelegramConfig:
     bot_token: str = ""                    # Токен от @BotFather
     chat_id: str = ""                      # ID чата (узнать через @userinfobot)
     enabled: bool = False                  # Включить/выключить уведомления
-    tick_summary_interval: int = 10        # Отправлять саммари каждые N тиков (0 = выкл)
+    tick_summary_interval: int = 4         # Отправлять саммари каждые N тиков (0 = выкл); 4 тика × 15мин = 1 час
 
 
 @dataclass

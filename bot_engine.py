@@ -69,6 +69,8 @@ class BotEngine:
         # Состояние
         self._current_mode: Optional[str] = None  # "trend" / "wait" / None
         self._last_snapshot: Optional[MarketSnapshot] = None
+        self._last_risk_pnl_pct: str = "0.00%"     # Последний дневной PnL % (из тика)
+        self._last_risk_drawdown_pct: str = "0.00%" # Последняя просадка % (из тика)
         self._tick_count: int = 0
         self._running: bool = False
         self._initialized: bool = False
@@ -154,10 +156,12 @@ class BotEngine:
         if self.notifier:
             self.notifier.update_balance(balance["total"])
         risk_report = self.risk_mgr.check_can_trade(balance["total"])
+        self._last_risk_pnl_pct = f"{risk_report.daily_pnl_pct*100:.2f}%"
+        self._last_risk_drawdown_pct = f"{risk_report.drawdown_pct*100:.2f}%"
         result["risk"] = {
             "can_trade": risk_report.can_trade,
-            "daily_pnl_pct": f"{risk_report.daily_pnl_pct*100:.2f}%",
-            "drawdown_pct": f"{risk_report.drawdown_pct*100:.2f}%",
+            "daily_pnl_pct": self._last_risk_pnl_pct,
+            "drawdown_pct": self._last_risk_drawdown_pct,
         }
 
         if not risk_report.can_trade:

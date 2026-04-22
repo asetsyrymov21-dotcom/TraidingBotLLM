@@ -293,15 +293,15 @@ class MultiUserRunner:
         """Отправляет сводку по всем парам пользователя в Telegram."""
         if not ctx.notifier:
             return
-        pairs_info = ", ".join(ctx.engines.keys()) or "нет активных пар"
-        # Используем первый попавшийся движок для метрик (для совместимости с notifier)
+        # Используем первый попавшийся движок с данными для метрик
         for sym, engine in ctx.engines.items():
             snap = engine._last_snapshot
             if snap:
                 ctx.notifier.notify_tick_summary(
                     uid, self._global_tick, snap.close,
                     snap.state.value, engine._current_mode or "?",
-                    "?", "?",
+                    engine._last_risk_pnl_pct,
+                    engine._last_risk_drawdown_pct,
                 )
                 break
 
