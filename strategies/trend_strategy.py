@@ -250,10 +250,10 @@ class TrendStrategy:
             logger.info(f"[TREND] skip entry | reason={result['reason']}")
             return result
 
-        # ── Фильтр объёма: свеча должна быть активнее среднего ──
-        if snapshot.avg_volume > 0 and snapshot.volume <= snapshot.avg_volume:
+        # ── Фильтр объёма: блокируем только аномально тихие свечи (<60% среднего) ──
+        if snapshot.avg_volume > 0 and snapshot.volume < snapshot.avg_volume * 0.6:
             result["reason"] = (
-                f"low_volume ({snapshot.volume:.0f} <= avg {snapshot.avg_volume:.0f})"
+                f"low_volume ({snapshot.volume:.0f} < 60% avg {snapshot.avg_volume:.0f})"
             )
             logger.info(f"[TREND] skip entry | reason={result['reason']}")
             return result

@@ -201,9 +201,16 @@ class BotEngine:
 
         # ── 4. Тик активной стратегии ──
         if self._current_mode == "trend":
-            # Только TrendStrategy. EntryStrategy отключена.
+            # TrendStrategy — основная стратегия по EMA crossover
             trend_result = self.trend_bot.tick(snapshot)
             result["actions"]["trend"] = trend_result
+
+            # EntryStrategy — дополнительный вход по RSI+MACD+BB
+            # Запускаем только если TrendBot не открыл позицию в этот тик
+            # чтобы не открывать две позиции одновременно на одной паре
+            if self.trend_bot.state.position is None:
+                entry_result = self.entry_bot.tick(snapshot)
+                result["actions"]["entry"] = entry_result
 
         elif self._current_mode == "wait":
             # Флэт / неопределённость — ждём без сделок.
@@ -211,6 +218,9 @@ class BotEngine:
             if self.trend_bot.state.position is not None:
                 trend_result = self.trend_bot.tick(snapshot)
                 result["actions"]["trend_manage"] = trend_result
+            elif self.entry_bot.position is not None:
+                entry_result = self.entry_bot.tick(snapshot)
+                result["actions"]["entry_manage"] = entry_result
             else:
                 result["actions"]["wait"] = {"action": "waiting", "reason": "flat_market"}
                 logger.debug(

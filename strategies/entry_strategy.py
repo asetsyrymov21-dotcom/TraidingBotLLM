@@ -168,49 +168,44 @@ class EntryStrategy:
         else:
             reasons.append("MACD data missing")
 
-        # ──────────── Bollinger Bands сигнал ────────────
+        # ──────────── Bollinger Bands сигнал (трендовая логика) ────────────
+        # Используем BB midband (SMA20) как трендовый фильтр:
+        # Цена ВЫШЕ midband → рынок бычий → LONG
+        # Цена НИЖЕ midband → рынок медвежий → SHORT
+        # Старая mean-reversion логика (buy at lower band) противоречила тренду:
+        # в сильном аптренде цена едет по верхней полосе, BB давал сигнал SHORT.
         bb_signal = False
         bb_side = "neutral"
+        bb_mid = snapshot.bb_mid
         bb_upper = snapshot.bb_upper
         bb_lower = snapshot.bb_lower
-        bb_mid = snapshot.bb_mid
 
-        if bb_upper and bb_lower and bb_mid:
+        if bb_mid and bb_upper and bb_lower:
             bb_range = bb_upper - bb_lower
-            # Зона "у края" = последние 20% полосы
-            edge_pct = 0.20
-            lower_edge = bb_lower + bb_range * edge_pct   # нижние 20% → LONG
-            upper_edge = bb_upper - bb_range * edge_pct   # верхние 20% → SHORT
+            # Мёртвая зона: слишком узкие полосы = нет тренда, BB не голосует
+            bb_squeeze = bb_range / bb_mid < 0.005  # ширина полосы < 0.5% цены
 
             logger.info(
-                f"[ENTRY] BB check | price={price:.4f} lower={bb_lower:.4f} "
-                f"lower_edge={lower_edge:.4f} upper_edge={upper_edge:.4f} "
-                f"upper={bb_upper:.4f} range={bb_range:.4f}"
+                f"[ENTRY] BB check | price={price:.4f} mid={bb_mid:.4f} "
+                f"range={bb_range:.4f} squeeze={bb_squeeze}"
             )
 
-            # Трендовая логика BB: голосуем только у краёв полосы.
-            # Цена у нижней границы → перепродан → LONG
-            # Цена у верхней границы → перекуплен → SHORT
-            # В середине полосы — нейтрально (не мешаем RSI+MACD)
-            if price <= lower_edge:
+            if bb_squeeze:
+                bb_side = "neutral"
+                bb_signal = False
+                reasons.append(f"BB squeeze->neutral (band too tight, no trend)")
+            elif price > bb_mid:
                 bb_side = "long"
                 bb_signal = True
-                reasons.append(
-                    f"BB near lower band->LONG (price={price:.2f}, edge={lower_edge:.2f})"
-                )
-            elif price >= upper_edge:
+                reasons.append(f"BB price above midband->LONG (price={price:.2f} > mid={bb_mid:.2f})")
+            elif price < bb_mid:
                 bb_side = "short"
                 bb_signal = True
-                reasons.append(
-                    f"BB near upper band->SHORT (price={price:.2f}, edge={upper_edge:.2f})"
-                )
+                reasons.append(f"BB price below midband->SHORT (price={price:.2f} < mid={bb_mid:.2f})")
             else:
                 bb_side = "neutral"
                 bb_signal = False
-                reasons.append(
-                    f"BB mid-zone->neutral (price={price:.2f}, "
-                    f"range=[{lower_edge:.2f}–{upper_edge:.2f}])"
-                )
+                reasons.append(f"BB price at midband->neutral")
         else:
             reasons.append("BB data missing")
 

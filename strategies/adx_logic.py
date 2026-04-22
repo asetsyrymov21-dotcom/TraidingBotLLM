@@ -30,7 +30,7 @@ class ADXConfig:
 
     di_noise_thr: float  = 5.0   # |+DI − −DI| < → шум, сигнал ненадёжен
     di_clear_thr: float  = 10.0  # |+DI − −DI| ≥ → чёткий сигнал направления
-    di_exit_thr:  float  = 3.0   # DI сближаются ниже этого при падающем ADX → выход
+    di_exit_thr:  float  = 5.0   # DI сближаются ниже этого при падающем ADX → выход (было 3.0 — слишком рано)
 
 
 def adx_signal(

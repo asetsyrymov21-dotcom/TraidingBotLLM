@@ -45,7 +45,7 @@ class GridConfig:
 @dataclass
 class TrendBotConfig:
     """Параметры трендового бота"""
-    tp_pct: float = 0.012              # Take Profit 1.2% (под 15m таймфрейм)
+    tp_pct: float = 0.015              # Take Profit 1.5% → R:R = 2.14:1 (было 1.2%, R:R=1.71:1)
     sl_pct: float = 0.007              # Stop Loss 0.7%  (под 15m таймфрейм)
     trail_pct: float = 0.006           # Trailing Stop: отступ от лучшей цены 0.6%
     trail_activate_pct: float = 0.004  # Trailing активируется при прибыли 0.4%
