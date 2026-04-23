@@ -120,7 +120,7 @@ class TrendStrategy:
         if self.state.paused_until > time.time():
             result["reason"] = "pause_active"
             if self.notifier:
-                self.notifier.notify_trend_skip(self.user_id, "pause_active", snapshot.close)
+                self.notifier.notify_trend_skip(self.user_id, "pause_active", snapshot.close, symbol=self.symbol)
             return result
 
         # ── Задержка после убытка ──
@@ -136,7 +136,7 @@ class TrendStrategy:
             logger.warning(f"{self._tag} Abnormal volatility — skipping entry")
             result["reason"] = "high_volatility"
             if self.notifier:
-                self.notifier.notify_trend_skip(self.user_id, "high_volatility", snapshot.close)
+                self.notifier.notify_trend_skip(self.user_id, "high_volatility", snapshot.close, symbol=self.symbol)
             return result
 
         # ── Управление открытой позицией ──
@@ -322,6 +322,9 @@ class TrendStrategy:
                 self.user_id, side, price, amount, tp_price, sl_price,
                 rsi, snapshot.ema_fast, snapshot.ema_slow,
                 self.state.last_result.value, self.state.current_size_multiplier,
+                symbol=self.symbol,
+                atr=snapshot.atr,
+                leverage=self.exchange.profile.leverage,
             )
 
         result.update({"action": f"open_{side}", "side": side, "reason": "trend_entry"})
@@ -418,6 +421,7 @@ class TrendStrategy:
             self.notifier.notify_trend_close(
                 self.user_id, pos.side, pos.entry_price, price, pnl, reason,
                 self.state.win_streak, self.state.loss_streak,
+                symbol=self.symbol,
             )
 
         self.state.position = None

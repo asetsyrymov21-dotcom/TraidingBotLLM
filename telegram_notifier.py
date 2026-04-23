@@ -145,29 +145,40 @@ class TelegramNotifier:
         market_state: str,
         price: float,
         adx: Optional[float] = None,
+        symbol: str = "",
+        ema_fast: Optional[float] = None,
+        ema_slow: Optional[float] = None,
+        atr: Optional[float] = None,
     ):
         mode_names = {
             "grid": "🔲 GRID (флэт)",
             "trend": "📈 ТРЕНД",
+            "wait": "⏸ ОЖИДАНИЕ",
         }
         old_name = mode_names.get(old_mode, "—")
         new_name = mode_names.get(new_mode, "—")
 
         reasons = {
-            "FLAT": "ADX показывает слабый тренд — рынок во флэте, лучше торговать сеткой",
+            "FLAT": "ADX показывает слабый тренд — рынок во флэте, ждём тренд",
             "TREND_UP": "ADX показывает сильный восходящий тренд — торгуем по тренду вверх",
             "TREND_DOWN": "ADX показывает сильный нисходящий тренд — торгуем по тренду вниз",
             "UNKNOWN": "Состояние рынка неопределённое",
         }
 
-        adx_str = f"\n📏 ADX: {adx:.1f}" if adx else ""
+        symbol_str = f"\n📊 Пара: <b>{symbol}</b>" if symbol else ""
+        adx_str = f"\n📏 ADX: {adx:.1f}" if adx is not None else ""
+        atr_str = f" | ATR: {atr:.4f}" if atr is not None else ""
+        ema_str = ""
+        if ema_fast is not None and ema_slow is not None:
+            cross = "▲" if ema_fast > ema_slow else "▼"
+            ema_str = f"\n📉 EMA9: {ema_fast:.2f} {cross} EMA21: {ema_slow:.2f}"
 
         self._send_message(
             f"🔄 <b>Смена режима</b>\n"
-            f"👤 {user_id}\n"
+            f"👤 {user_id}{symbol_str}\n"
             f"Было: {old_name} → Стало: {new_name}\n"
-            f"💲 Цена: {price:.4f}\n"
-            f"📊 Рынок: {market_state}{adx_str}\n\n"
+            f"💲 Цена: {price:.4f}{atr_str}\n"
+            f"🌡 Рынок: {market_state}{adx_str}{ema_str}\n\n"
             f"💡 <i>Причина: {reasons.get(market_state, market_state)}</i>"
         )
 
@@ -188,31 +199,34 @@ class TelegramNotifier:
         ema_slow: float,
         last_result: str,
         size_mult: float,
+        symbol: str = "",
+        atr: Optional[float] = None,
+        leverage: int = 1,
     ):
         side_emoji = "🟢 LONG" if side == "long" else "🔴 SHORT"
 
+        symbol_str = f"\n📊 Пара: <b>{symbol}</b>" if symbol else ""
+        atr_str = f" | ATR: {atr:.4f}" if atr is not None else ""
+        leverage_str = f"⚡ Плечо: x{leverage} | " if leverage > 1 else ""
+
         # Объясняем почему именно эта сторона
         if last_result == "LOSS":
-            side_reason = (
-                f"Предыдущая сделка была убыточной → переворот в {side.upper()}"
-            )
+            side_reason = f"Предыдущая сделка была убыточной → переворот в {side.upper()}"
         elif last_result == "WIN":
-            side_reason = (
-                f"Предыдущая сделка была прибыльной → продолжаем {side.upper()}"
-            )
+            side_reason = f"Предыдущая сделка была прибыльной → продолжаем {side.upper()}"
         else:
             side_reason = f"Первый вход по тренду в {side.upper()}"
 
         ema_reason = (
-            f"EMA50 ({ema_fast:.2f}) {'выше' if ema_fast > ema_slow else 'ниже'} "
-            f"EMA200 ({ema_slow:.2f}) → {'восходящий' if ema_fast > ema_slow else 'нисходящий'} тренд"
+            f"EMA9 ({ema_fast:.2f}) {'выше' if ema_fast > ema_slow else 'ниже'} "
+            f"EMA21 ({ema_slow:.2f}) → {'восходящий' if ema_fast > ema_slow else 'нисходящий'} тренд"
         )
 
         self._send_message(
             f"📈 <b>ТРЕНД: Открыта позиция</b>\n"
-            f"👤 {user_id}\n"
-            f"🔹 {side_emoji} @ {price:.4f}\n"
-            f"📦 Размер: {amount} (множитель ×{size_mult:.2f})\n"
+            f"👤 {user_id}{symbol_str}\n"
+            f"🔹 {side_emoji} @ {price:.4f}{atr_str}\n"
+            f"📦 {leverage_str}Размер: {amount} (×{size_mult:.2f})\n"
             f"🎯 TP: {tp:.4f} (+{abs(tp/price - 1)*100:.1f}%)\n"
             f"🛑 SL: {sl:.4f} (-{abs(sl/price - 1)*100:.1f}%)\n\n"
             f"💡 <i>Почему {side.upper()}:</i>\n"
@@ -231,6 +245,7 @@ class TelegramNotifier:
         reason: str,
         win_streak: int,
         loss_streak: int,
+        symbol: str = "",
     ):
         is_win = pnl > 0
         pnl_emoji = "✅" if is_win else "❌"
@@ -240,21 +255,28 @@ class TelegramNotifier:
             "sl": "Цена достигла Stop Loss — ограничиваем убыток",
             "squeeze": "Обнаружен сквиз (резкое движение против позиции) — экстренный выход",
             "force_close": "Принудительное закрытие (остановка бота или смена режима)",
+            "trail_stop": "Trailing Stop сработал — фиксируем прибыль",
+            "adx_exit_long": "ADX сигнал: разворот из лонга",
+            "adx_exit_short": "ADX сигнал: разворот из шорта",
         }
 
+        symbol_str = f"\n📊 Пара: <b>{symbol}</b>" if symbol else ""
         streak = f"🏆 Серия побед: {win_streak}" if win_streak > 0 else f"💀 Серия убытков: {loss_streak}"
+        price_change_pct = (close_price - entry_price) / entry_price * 100
+        if side == "short":
+            price_change_pct = -price_change_pct
 
         self._send_message(
             f"{pnl_emoji} <b>ТРЕНД: Позиция закрыта</b>\n"
-            f"👤 {user_id}\n"
+            f"👤 {user_id}{symbol_str}\n"
             f"{'🟢' if side == 'long' else '🔴'} {side.upper()}\n"
-            f"📥 Вход: {entry_price:.4f} → 📤 Выход: {close_price:.4f}\n"
+            f"📥 Вход: {entry_price:.4f} → 📤 Выход: {close_price:.4f} ({price_change_pct:+.2f}%)\n"
             f"💰 PnL: {pnl:+.4f} USDT\n"
             f"{streak}\n\n"
             f"💡 <i>Причина: {reason_text.get(reason, reason)}</i>"
         )
 
-    def notify_trend_skip(self, user_id: str, reason: str, price: float):
+    def notify_trend_skip(self, user_id: str, reason: str, price: float, symbol: str = ""):
         """Уведомление о пропуске входа (только важные — пауза, волатильность)"""
         important_reasons = {
             "pause_active": "⏸ Пауза после серии убытков. Бот ждёт 20 минут",
@@ -262,9 +284,10 @@ class TelegramNotifier:
         }
         text = important_reasons.get(reason)
         if text:
+            symbol_str = f" | 📊 {symbol}" if symbol else ""
             self._send_message(
                 f"⚠️ <b>ТРЕНД: Пропуск входа</b>\n"
-                f"👤 {user_id} | 💲 {price:.4f}\n"
+                f"👤 {user_id}{symbol_str} | 💲 {price:.4f}\n"
                 f"{text}"
             )
 

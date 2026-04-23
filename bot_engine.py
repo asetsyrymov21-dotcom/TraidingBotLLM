@@ -208,6 +208,10 @@ class BotEngine:
                     self.profile.user_id, old_mode, new_mode,
                     snapshot.state.value, snapshot.close,
                     adx=snapshot.adx,
+                    symbol=self.profile.symbol,
+                    ema_fast=snapshot.ema_fast,
+                    ema_slow=snapshot.ema_slow,
+                    atr=snapshot.atr,
                 )
 
         result["mode"] = self._current_mode
