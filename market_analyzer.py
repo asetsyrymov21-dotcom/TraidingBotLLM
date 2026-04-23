@@ -52,8 +52,11 @@ class MarketAnalyzer:
     Возвращает MarketSnapshot с полным набором индикаторов.
     """
 
-    def __init__(self, cfg: MarketAnalyzerConfig):
+    def __init__(self, cfg: MarketAnalyzerConfig, label: str = ""):
         self.cfg = cfg
+        # Метка для логов — "alice:BTC/USDT". Позволяет различать логи
+        # разных пар в мультипарном режиме.
+        self.label = label
 
     # ──────────────────────────────────────────
     #  Публичный интерфейс
@@ -64,8 +67,9 @@ class MarketAnalyzer:
         Принимает список свечей OHLCV (от CCXT).
         Каждая свеча: [timestamp, open, high, low, close, volume]
         """
+        prefix = f"[{self.label}] " if self.label else ""
         if len(ohlcv) < self.cfg.ema_slow + 10:
-            logger.warning(f"Not enough candles: {len(ohlcv)} < {self.cfg.ema_slow + 10}")
+            logger.warning(f"{prefix}Not enough candles: {len(ohlcv)} < {self.cfg.ema_slow + 10}")
             return None
 
         closes  = np.array([c[4] for c in ohlcv], dtype=float)
@@ -139,7 +143,7 @@ class MarketAnalyzer:
             avg_volume=avg_volume,
         )
         logger.info(
-            f"Market: {state.value} | Close={close:.4f} | "
+            f"{prefix}Market: {state.value} | Close={close:.4f} | "
             f"EMA9={ema_fast:.2f} EMA21={ema_slow:.2f} | "
             f"ADX={adx:.1f} +DI={plus_di:.1f} -DI={minus_di:.1f} | "
             f"ATR={atr:.4f} ({atr_pct*100:.2f}%) | RSI={rsi:.1f} | "

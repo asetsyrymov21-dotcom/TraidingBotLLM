@@ -49,8 +49,14 @@ class UserManager:
         is_testnet: bool = False,
         custom_config: Optional[Dict] = None,
         telegram_chat_id: str = "",
+        symbols: Optional[List[str]] = None,
+        top_n_symbols: int = 0,
     ) -> UserProfile:
-        """Регистрирует нового пользователя"""
+        """Регистрирует нового пользователя.
+
+        symbols — фиксированный список пар (приоритет над symbol).
+        top_n_symbols — автоматический выбор топ-N пар по объёму (если >0).
+        """
         if user_id in self.users:
             raise ValueError(f"User '{user_id}' already exists")
 
@@ -60,6 +66,8 @@ class UserManager:
             api_key=api_key,
             api_secret=api_secret,
             symbol=symbol,
+            symbols=list(symbols) if symbols else [],
+            top_n_symbols=top_n_symbols,
             leverage=leverage,
             deposit_pct=deposit_pct,
             commission_pct=commission_pct,
@@ -69,7 +77,11 @@ class UserManager:
         )
         self.users[user_id] = profile
         self._save_users()
-        logger.info(f"[USERS] Added user '{user_id}' on {exchange.upper()} | {symbol}")
+        active = profile.get_active_symbols()
+        logger.info(
+            f"[USERS] Added user '{user_id}' on {exchange.upper()} | "
+            f"symbols={active} top_n={top_n_symbols}"
+        )
         return profile
 
     def remove_user(self, user_id: str) -> bool:
@@ -94,8 +106,14 @@ class UserManager:
         commission_pct: Optional[float] = None,
         symbol: Optional[str] = None,
         custom_config: Optional[Dict] = None,
+        symbols: Optional[List[str]] = None,
+        top_n_symbols: Optional[int] = None,
     ) -> bool:
-        """Обновляет настройки пользователя"""
+        """Обновляет настройки пользователя.
+
+        symbols и top_n_symbols позволяют переключаться между режимами
+        "ручной список пар" и "автоматический топ-N по объёму".
+        """
         user = self.users.get(user_id)
         if not user:
             return False
@@ -115,6 +133,14 @@ class UserManager:
 
         if symbol is not None:
             user.symbol = symbol
+
+        if symbols is not None:
+            user.symbols = list(symbols)
+
+        if top_n_symbols is not None:
+            if top_n_symbols < 0:
+                raise ValueError(f"top_n_symbols must be >= 0, got {top_n_symbols}")
+            user.top_n_symbols = top_n_symbols
 
         if custom_config is not None:
             user.custom_config = {**(user.custom_config or {}), **custom_config}
@@ -179,14 +205,19 @@ class UserManager:
 
     def print_summary(self):
         """Печатает сводку по всем пользователям"""
-        print(f"\n{'='*50}")
+        print(f"\n{'='*70}")
         print(f"  USERS ({len(self.users)} total)")
-        print(f"{'='*50}")
+        print(f"{'='*70}")
         for uid, p in self.users.items():
+            if p.top_n_symbols > 0:
+                pairs_desc = f"TOP-{p.top_n_symbols} (авто)"
+            elif p.symbols:
+                pairs_desc = ", ".join(p.symbols)
+            else:
+                pairs_desc = p.symbol
             print(
-                f"  {uid:20s} | {p.exchange:8s} | {p.symbol:10s} | "
+                f"  {uid:15s} | {p.exchange:8s} | {pairs_desc:30s} | "
                 f"x{p.leverage} | {p.deposit_pct*100:.0f}% | "
-                f"comm={p.commission_pct*100:.0f}% | "
                 f"{'TESTNET' if p.is_testnet else 'LIVE'}"
             )
-        print(f"{'='*50}\n")
+        print(f"{'='*70}\n")

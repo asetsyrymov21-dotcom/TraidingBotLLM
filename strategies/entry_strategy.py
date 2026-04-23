@@ -52,9 +52,14 @@ class EntryStrategy:
     """
 
     def __init__(self, exchange: ExchangeConnector, cfg: EntryBotConfig,
-                 notifier: Optional['TelegramNotifier'] = None, user_id: str = ""):
+                 notifier: Optional['TelegramNotifier'] = None, user_id: str = "",
+                 symbol: str = ""):
         self.exchange = exchange
         self.cfg = cfg
+        self.symbol = symbol
+        # Тег для логов: "[ENTRY:BTC/USDT]" в мультипарном режиме,
+        # "[ENTRY]" если пара не задана (обратная совместимость).
+        self._tag = f"[ENTRY:{symbol}]" if symbol else "[ENTRY]"
         self.position: Optional[EntryPosition] = None
         self._prev_macd_diff: Optional[float] = None
         self.total_pnl = 0.0
@@ -71,7 +76,7 @@ class EntryStrategy:
         result = {"action": "none", "side": None, "pnl": 0.0, "reason": ""}
 
         logger.info(
-            f"[ENTRY] tick start | price={snapshot.close} "
+            f"{self._tag} tick start | price={snapshot.close} "
             f"state={getattr(snapshot.state, 'value', snapshot.state)} "
             f"has_position={self.position is not None}"
         )
@@ -79,7 +84,7 @@ class EntryStrategy:
         # Управление открытой позицией
         if self.position:
             logger.info(
-                f"[ENTRY] managing open position | side={self.position.side} "
+                f"{self._tag} managing open position | side={self.position.side} "
                 f"entry={self.position.entry_price} amount={self.position.amount}"
             )
             return self._manage_position(snapshot)
@@ -88,18 +93,18 @@ class EntryStrategy:
         signal = self._analyze_signal(snapshot)
 
         logger.info(
-            f"[ENTRY] signal analyzed | side={signal.side} confidence={signal.confidence} "
+            f"{self._tag} signal analyzed | side={signal.side} confidence={signal.confidence} "
             f"rsi={signal.rsi_signal} macd={signal.macd_signal} bb={signal.bb_signal} "
             f"reason={signal.reason}"
         )
 
         if signal.confidence < 2:
             result["reason"] = f"signal_weak ({signal.confidence}/3): {signal.reason}"
-            logger.info(f"[ENTRY] skip entry | reason={result['reason']}")
+            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
         # Открытие позиции
-        logger.info(f"[ENTRY] signal accepted -> opening position | side={signal.side}")
+        logger.info(f"{self._tag} signal accepted -> opening position | side={signal.side}")
         return self._open_position(snapshot, signal)
 
     # ──────────────────────────────────────────
@@ -138,7 +143,7 @@ class EntryStrategy:
         if macd is not None and macd_sig is not None:
             macd_diff = macd - macd_sig
             logger.info(
-                f"[ENTRY] MACD check | macd={macd:.6f} signal={macd_sig:.6f} "
+                f"{self._tag} MACD check | macd={macd:.6f} signal={macd_sig:.6f} "
                 f"diff={macd_diff:.6f} prev_diff={self._prev_macd_diff}"
             )
 
@@ -186,7 +191,7 @@ class EntryStrategy:
             bb_squeeze = bb_range / bb_mid < 0.005  # ширина полосы < 0.5% цены
 
             logger.info(
-                f"[ENTRY] BB check | price={price:.4f} mid={bb_mid:.4f} "
+                f"{self._tag} BB check | price={price:.4f} mid={bb_mid:.4f} "
                 f"range={bb_range:.4f} squeeze={bb_squeeze}"
             )
 
@@ -231,7 +236,7 @@ class EntryStrategy:
             confidence = 0
 
         logger.info(
-            f"[ENTRY] votes | rsi_side={rsi_side} macd_side={macd_side} bb_side={bb_side} "
+            f"{self._tag} votes | rsi_side={rsi_side} macd_side={macd_side} bb_side={bb_side} "
             f"long_votes={long_votes} short_votes={short_votes} "
             f"final_side={final_side} confidence={confidence}"
         )
@@ -253,30 +258,30 @@ class EntryStrategy:
         price = snapshot.close
 
         logger.info(
-            f"[ENTRY] open_position start | raw_signal_side={signal.side} price={price:.4f}"
+            f"{self._tag} open_position start | raw_signal_side={signal.side} price={price:.4f}"
         )
 
         amount = self.exchange.calc_position_size(self.cfg.position_pct, price)
         logger.info(
-            f"[ENTRY] amount calculated | position_pct={self.cfg.position_pct} "
+            f"{self._tag} amount calculated | position_pct={self.cfg.position_pct} "
             f"price={price:.4f} amount={amount}"
         )
 
         if amount <= 0:
             logger.warning(
-                "[ENTRY] skip open | reason=insufficient_balance_or_zero_amount"
+                f"{self._tag} skip open | reason=insufficient_balance_or_zero_amount"
             )
             return {"action": "none", "reason": "insufficient_balance", "pnl": 0.0}
 
         side = signal.side
-        logger.info(f"[ENTRY] calling place_market_order | side={side} amount={amount}")
+        logger.info(f"{self._tag} calling place_market_order | side={side} amount={amount}")
 
         order = self.exchange.place_market_order(side, amount)
 
-        logger.info(f"[ENTRY] place_market_order result | order={order}")
+        logger.info(f"{self._tag} place_market_order result | order={order}")
 
         if not order:
-            logger.warning("[ENTRY] skip open | reason=order_failed")
+            logger.warning(f"{self._tag} skip open | reason=order_failed")
             if self.notifier:
                 self.notifier.notify_order_failed(
                     self.user_id, "УМНЫЙ ВХОД", signal.side, price,
@@ -301,7 +306,7 @@ class EntryStrategy:
         self.trade_count += 1
 
         logger.info(
-            f"[ENTRY] OPEN {signal.side.upper()} @ {price:.4f} | "
+            f"{self._tag} OPEN {signal.side.upper()} @ {price:.4f} | "
             f"amount={amount} TP={tp:.4f} SL={sl:.4f} | {signal.reason}"
         )
 
@@ -360,7 +365,7 @@ class EntryStrategy:
                 self.win_count += 1
 
             logger.info(
-                f"[ENTRY] CLOSE {pos.side.upper()} @ {price:.4f} | "
+                f"{self._tag} CLOSE {pos.side.upper()} @ {price:.4f} | "
                 f"PnL={pnl:.4f} | {reason.upper()}"
             )
 

@@ -35,7 +35,8 @@ class BotEngine:
     def __init__(self, profile: UserProfile, config: SystemConfig,
                  notifier: Optional['TelegramNotifier'] = None,
                  symbol: Optional[str] = None,
-                 deposit_pct_override: Optional[float] = None):
+                 deposit_pct_override: Optional[float] = None,
+                 notify_start: bool = True):
         # Если задан symbol — создаём копию профиля с нужной парой
         if symbol and symbol != profile.symbol:
             import copy
@@ -51,22 +52,33 @@ class BotEngine:
         self.profile = profile
         self.config = profile.get_effective_config(config)
 
+        # Единая метка для логов: "alice:BTC/USDT" — чтобы в мультипарном
+        # режиме было видно какой движок пишет в лог.
+        self._log_label = f"{profile.user_id}:{profile.symbol}"
+
         # Telegram-уведомления
         self.notifier = notifier
 
         # Компоненты
         self.exchange = ExchangeConnector(profile)
-        self.analyzer = MarketAnalyzer(self.config.market_analyzer)
+        self.analyzer = MarketAnalyzer(self.config.market_analyzer, label=self._log_label)
         self.risk_mgr = RiskManager(
             self.config.risk,
             commission_pct=profile.commission_pct,
         )
 
-        # Стратегии (передаём notifier)
-        self.trend_bot = TrendStrategy(self.exchange, self.config.trend_bot, notifier=notifier, user_id=profile.user_id)
-        self.entry_bot = EntryStrategy(self.exchange, self.config.entry_bot, notifier=notifier, user_id=profile.user_id)
+        # Стратегии (передаём notifier и symbol для логов)
+        self.trend_bot = TrendStrategy(
+            self.exchange, self.config.trend_bot,
+            notifier=notifier, user_id=profile.user_id, symbol=profile.symbol,
+        )
+        self.entry_bot = EntryStrategy(
+            self.exchange, self.config.entry_bot,
+            notifier=notifier, user_id=profile.user_id, symbol=profile.symbol,
+        )
 
         # Состояние
+        self._notify_start = notify_start  # False в мультипарном режиме
         self._current_mode: Optional[str] = None  # "trend" / "wait" / None
         self._last_snapshot: Optional[MarketSnapshot] = None
         self._last_risk_pnl_pct: str = "0.00%"     # Последний дневной PnL % (из тика)
@@ -81,7 +93,7 @@ class BotEngine:
 
     def start(self):
         """Запуск бота"""
-        logger.info(f"[BOT:{self.profile.user_id}] Starting... {self.profile.symbol}")
+        logger.info(f"[BOT:{self._log_label}] Starting... {self.profile.symbol}")
         self._running = True
 
         # Инициализация риск-менеджера
@@ -89,11 +101,12 @@ class BotEngine:
         self.risk_mgr.initialize(balance["total"])
         self._initialized = True
         logger.info(
-            f"[BOT:{self.profile.user_id}] Balance: {balance['total']:.2f} USDT"
+            f"[BOT:{self._log_label}] Balance: {balance['total']:.2f} USDT"
         )
 
-        # Telegram: бот запущен
-        if self.notifier:
+        # Telegram: бот запущен (только в однопарном режиме;
+        # в мультипарном main.py шлёт одно объединённое сообщение)
+        if self.notifier and self._notify_start:
             self.notifier.notify_bot_started(
                 self.profile.user_id, self.profile.symbol,
                 self.profile.exchange, balance["total"],
@@ -101,7 +114,7 @@ class BotEngine:
 
     def stop(self):
         """Остановка бота — закрывает всё"""
-        logger.info(f"[BOT:{self.profile.user_id}] Stopping...")
+        logger.info(f"[BOT:{self._log_label}] Stopping...")
         self._running = False
 
         # Закрываем все стратегии
@@ -111,7 +124,7 @@ class BotEngine:
 
         # Итоговая статистика
         stats = self.get_stats()
-        logger.info(f"[BOT:{self.profile.user_id}] Final stats: {stats}")
+        logger.info(f"[BOT:{self._log_label}] Final stats: {stats}")
 
         # Telegram: бот остановлен
         if self.notifier:
@@ -140,7 +153,7 @@ class BotEngine:
                 self.config.market_analyzer.candle_limit,
             )
         except Exception as e:
-            logger.error(f"[BOT:{self.profile.user_id}] fetch_ohlcv failed: {e}")
+            logger.error(f"[BOT:{self._log_label}] fetch_ohlcv failed: {e}")
             return {"status": "error", "message": str(e)}
 
         snapshot = self.analyzer.analyze(ohlcv)
@@ -166,7 +179,7 @@ class BotEngine:
 
         if not risk_report.can_trade:
             logger.warning(
-                f"[BOT:{self.profile.user_id}] TRADING BLOCKED: {risk_report.reason}"
+                f"[BOT:{self._log_label}] TRADING BLOCKED: {risk_report.reason}"
             )
             # Telegram: торговля заблокирована
             if self.notifier:
@@ -224,7 +237,7 @@ class BotEngine:
             else:
                 result["actions"]["wait"] = {"action": "waiting", "reason": "flat_market"}
                 logger.debug(
-                    f"[BOT:{self.profile.user_id}] Флэт — ожидаем тренд"
+                    f"[BOT:{self._log_label}] Флэт — ожидаем тренд"
                 )
 
         result["status"] = "ok"
@@ -251,7 +264,7 @@ class BotEngine:
     def _switch_mode(self, snapshot: MarketSnapshot, new_mode: str):
         """Переключает режим: trend / wait."""
         logger.info(
-            f"[BOT:{self.profile.user_id}] MODE SWITCH: "
+            f"[BOT:{self._log_label}] MODE SWITCH: "
             f"{self._current_mode} -> {new_mode} | {snapshot.state.value}"
         )
 
@@ -260,13 +273,13 @@ class BotEngine:
             # Она дойдёт до TP или SL сама (управление продолжается в tick).
             if self.trend_bot.state.position is not None:
                 logger.info(
-                    f"[BOT:{self.profile.user_id}] Switching to wait — "
+                    f"[BOT:{self._log_label}] Switching to wait — "
                     f"trend position will close via TP/SL naturally"
                 )
 
     def _emergency_close(self):
         """Экстренное закрытие всех позиций"""
-        logger.warning(f"[BOT:{self.profile.user_id}] EMERGENCY CLOSE")
+        logger.warning(f"[BOT:{self._log_label}] EMERGENCY CLOSE")
         self.exchange.cancel_all_orders()
         self.exchange.close_all_positions()
         self._current_mode = None

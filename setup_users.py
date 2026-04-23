@@ -23,7 +23,10 @@ def setup_example_users():
         exchange="binance",
         api_key="BINANCE_API_KEY_HERE",
         api_secret="BINANCE_SECRET_HERE",
-        symbol="BTC/USDT",
+        # Мультипарный режим: одновременно торгуем BTC, ETH и SOL.
+        # deposit_pct делится поровну между всеми парами.
+        symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+        top_n_symbols=0,  # 0 = ручной список symbols, >0 = авто топ-N
         leverage=2,
         deposit_pct=0.05,
         commission_pct=0.20,

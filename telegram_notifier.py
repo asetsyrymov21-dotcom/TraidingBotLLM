@@ -85,6 +85,36 @@ class TelegramNotifier:
             f"💰 Баланс: {balance:.2f} USDT"
         )
 
+    def notify_bot_started_multi(
+        self,
+        user_id: str,
+        exchange: str,
+        symbols: list,
+        balance: float,
+        leverage: int = 1,
+        deposit_pct: float = 0.05,
+        is_testnet: bool = True,
+    ):
+        """
+        Одно объединённое уведомление о старте бота со списком всех активных пар.
+        Заменяет N отдельных notify_bot_started при мультипарном режиме.
+        """
+        n = len(symbols)
+        per_pair_pct = (deposit_pct / n * 100) if n > 0 else 0
+        pairs_text = "\n".join(f"  • {s}" for s in symbols)
+        testnet_str = "🧪 TESTNET" if is_testnet else "🔴 LIVE"
+
+        self._send_message(
+            f"🟢 <b>Бот запущен</b>\n"
+            f"👤 Пользователь: {user_id}\n"
+            f"🏦 Биржа: {exchange} | {testnet_str}\n"
+            f"⚡ Плечо: x{leverage}\n"
+            f"💰 Баланс: {balance:.2f} USDT\n\n"
+            f"📊 <b>Активные пары ({n}):</b>\n"
+            f"{pairs_text}\n\n"
+            f"💼 <i>На каждую пару: ~{per_pair_pct:.2f}% депозита</i>"
+        )
+
     def notify_bot_stopped(self, user_id: str, stats: dict):
         risk = stats.get("risk", {})
         trend = stats.get("trend_bot", {})

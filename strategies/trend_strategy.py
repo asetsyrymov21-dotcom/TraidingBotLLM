@@ -73,12 +73,15 @@ class TrendStrategy:
 
     def __init__(self, exchange: ExchangeConnector, cfg: TrendBotConfig,
                  notifier: Optional['TelegramNotifier'] = None, user_id: str = "",
-                 adx_cfg: ADXConfig = None):
+                 adx_cfg: ADXConfig = None, symbol: str = ""):
         self.exchange = exchange
         self.cfg = cfg
         self.state = TrendBotState()
         self.notifier = notifier
         self.user_id = user_id
+        self.symbol = symbol
+        # Тег для логов: "[TREND:BTC/USDT]" в мультипарном режиме.
+        self._tag = f"[TREND:{symbol}]" if symbol else "[TREND]"
         # ADX используется только для управления выходами, не для входов
         self.adx_cfg = adx_cfg or ADXConfig(adx_strong=20.0, adx_weak=15.0)
 
@@ -104,7 +107,7 @@ class TrendStrategy:
             cfg      = self.adx_cfg,
         )
         logger.info(
-            f"[TREND] ADX signal: {adx_sig} | "
+            f"{self._tag} ADX signal: {adx_sig} | "
             f"ADX={snapshot.adx:.1f}(prev={self.state.prev_adx:.1f}) "
             f"+DI={snapshot.plus_di:.1f} -DI={snapshot.minus_di:.1f} "
             f"pos={current_position}"
@@ -130,7 +133,7 @@ class TrendStrategy:
 
         # ── Анти-сквиз: аномальная волатильность ──
         if self._check_abnormal_volatility(snapshot):
-            logger.warning("[TREND] Abnormal volatility — skipping entry")
+            logger.warning(f"{self._tag} Abnormal volatility — skipping entry")
             result["reason"] = "high_volatility"
             if self.notifier:
                 self.notifier.notify_trend_skip(self.user_id, "high_volatility", snapshot.close)
@@ -154,14 +157,14 @@ class TrendStrategy:
 
         # ── Анти-сквиз: резкое движение против позиции ──
         if self._check_squeeze(pos, price):
-            logger.warning(f"[TREND] SQUEEZE detected! Closing {pos.side} @ {price}")
+            logger.warning(f"{self._tag} SQUEEZE detected! Closing {pos.side} @ {price}")
             pnl = self._close_position(price, "squeeze")
             result.update({"action": "close_squeeze", "pnl": pnl})
             return result
 
         # ── Ранний выход по ADX: DI развернулись или тренд угасает ──
         if adx_sig in ("exit_long", "exit_short"):
-            logger.info(f"[TREND] ADX exit signal: {adx_sig} | Closing {pos.side} @ {price}")
+            logger.info(f"{self._tag} ADX exit signal: {adx_sig} | Closing {pos.side} @ {price}")
             pnl = self._close_position(price, f"adx_{adx_sig}")
             result.update({"action": f"close_{adx_sig}", "pnl": pnl, "reason": adx_sig})
             return result
@@ -177,7 +180,7 @@ class TrendStrategy:
             )
             if triggered:
                 logger.info(
-                    f"[TREND] TRAIL STOP triggered | {pos.side.upper()} @ {price:.4f} | "
+                    f"{self._tag} TRAIL STOP triggered | {pos.side.upper()} @ {price:.4f} | "
                     f"trail_stop={pos.trail_stop_price:.4f} best={pos.best_price:.4f}"
                 )
                 pnl = self._close_position(price, "trail_stop")
@@ -208,7 +211,7 @@ class TrendStrategy:
         result = {"action": "none", "side": None, "pnl": 0.0, "reason": ""}
 
         logger.info(
-            f"[TREND] find_entry start | state={getattr(snapshot.state, 'value', snapshot.state)} "
+            f"{self._tag} find_entry start | state={getattr(snapshot.state, 'value', snapshot.state)} "
             f"close={snapshot.close} ema_fast={snapshot.ema_fast:.4f} "
             f"ema_slow={snapshot.ema_slow:.4f} rsi={snapshot.rsi}"
         )
@@ -216,7 +219,7 @@ class TrendStrategy:
         # ── Фильтр: только торгуем в тренде ──
         if snapshot.state not in (MarketState.TREND_UP, MarketState.TREND_DOWN):
             result["reason"] = "not_trending"
-            logger.info(f"[TREND] skip entry | reason={result['reason']}")
+            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
         # ── EMA9/21 crossover — основной сигнал входа ──
@@ -227,11 +230,11 @@ class TrendStrategy:
             ema_side = "short"
         else:
             result["reason"] = "ema_neutral"
-            logger.info(f"[TREND] skip entry | reason={result['reason']}")
+            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
         logger.info(
-            f"[TREND] ema_side={ema_side} | "
+            f"{self._tag} ema_side={ema_side} | "
             f"EMA9={snapshot.ema_fast:.4f} EMA21={snapshot.ema_slow:.4f}"
         )
 
@@ -242,12 +245,12 @@ class TrendStrategy:
 
         if ema_side == "long" and rsi < rsi_long_min:
             result["reason"] = f"rsi_below_min ({rsi:.1f} < {rsi_long_min})"
-            logger.info(f"[TREND] skip entry | reason={result['reason']}")
+            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
         if ema_side == "short" and rsi > rsi_short_max:
             result["reason"] = f"rsi_above_max ({rsi:.1f} > {rsi_short_max})"
-            logger.info(f"[TREND] skip entry | reason={result['reason']}")
+            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
         # ── Фильтр объёма: блокируем только аномально тихие свечи (<60% среднего) ──
@@ -255,13 +258,13 @@ class TrendStrategy:
             result["reason"] = (
                 f"low_volume ({snapshot.volume:.0f} < 60% avg {snapshot.avg_volume:.0f})"
             )
-            logger.info(f"[TREND] skip entry | reason={result['reason']}")
+            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
         # ── Определение стороны (следуем EMA crossover) ──
         side = self._determine_side(ema_side)
         logger.info(
-            f"[TREND] side determined | ema_side={ema_side} final_side={side}"
+            f"{self._tag} side determined | ema_side={ema_side} final_side={side}"
         )
 
         # ── Расчёт размера позиции ──
@@ -269,23 +272,23 @@ class TrendStrategy:
         amount = self._calc_dynamic_size(price)
 
         logger.info(
-            f"[TREND] amount calculated | price={price:.4f} "
+            f"{self._tag} amount calculated | price={price:.4f} "
             f"size_multiplier={self.state.current_size_multiplier} amount={amount}"
         )
 
         if amount <= 0:
             result["reason"] = "insufficient_balance"
-            logger.warning(f"[TREND] skip entry | reason={result['reason']}")
+            logger.warning(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
         # ── Открытие позиции ──
-        logger.info(f"[TREND] calling place_market_order | side={side} amount={amount}")
+        logger.info(f"{self._tag} calling place_market_order | side={side} amount={amount}")
         order = self.exchange.place_market_order(side, amount)
-        logger.info(f"[TREND] place_market_order result | order={order}")
+        logger.info(f"{self._tag} place_market_order result | order={order}")
 
         if not order:
             result["reason"] = "order_failed"
-            logger.warning(f"[TREND] skip entry | reason={result['reason']}")
+            logger.warning(f"{self._tag} skip entry | reason={result['reason']}")
             if self.notifier:
                 self.notifier.notify_order_failed(
                     self.user_id, "ТРЕНД", side, price,
@@ -308,7 +311,7 @@ class TrendStrategy:
         self.state.trade_count += 1
 
         logger.info(
-            f"[TREND] OPEN {side.upper()} @ {price:.4f} | "
+            f"{self._tag} OPEN {side.upper()} @ {price:.4f} | "
             f"TP={tp_price:.4f} SL={sl_price:.4f} | "
             f"Amount={amount} | RSI={rsi:.1f}"
         )
@@ -400,12 +403,12 @@ class TrendStrategy:
                 pause_secs = 20 * 60  # 20 минут
                 self.state.paused_until = time.time() + pause_secs
                 logger.warning(
-                    f"[TREND] Loss streak {self.state.loss_streak}! "
+                    f"{self._tag} Loss streak {self.state.loss_streak}! "
                     f"Pausing for {pause_secs//60} minutes."
                 )
 
         logger.info(
-            f"[TREND] CLOSE {pos.side.upper()} @ {price:.4f} | "
+            f"{self._tag} CLOSE {pos.side.upper()} @ {price:.4f} | "
             f"PnL={pnl:.4f} | Reason={reason} | "
             f"Win={self.state.win_streak} Loss={self.state.loss_streak}"
         )

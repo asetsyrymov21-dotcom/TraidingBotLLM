@@ -124,6 +124,7 @@ class UserContext:
                     notifier=self.notifier,
                     symbol=sym,
                     deposit_pct_override=per_pair_pct,
+                    notify_start=False,  # объединённое уведомление шлётся из main.py
                 )
                 engine.start()
                 self.engines[sym] = engine
@@ -213,6 +214,12 @@ class MultiUserRunner:
             except Exception as e:
                 logger.error(f"[{uid}] Ошибка при инициализации: {e}", exc_info=True)
 
+        # Печатаем крупный баннер со списком всех активных пар по каждому юзеру
+        self._print_pairs_banner()
+
+        # Telegram: одно объединённое сообщение о старте на каждого пользователя
+        self._notify_started_all()
+
         # Главный цикл
         while not self._stop_event.is_set():
             self._global_tick += 1
@@ -269,6 +276,65 @@ class MultiUserRunner:
     def _force_exit(signum, frame):
         logger.warning("Принудительный выход (двойной Ctrl+C)")
         os._exit(1)
+
+    def _print_pairs_banner(self):
+        """Печатает заметный баннер со списком активных пар по каждому юзеру.
+
+        Нужен чтобы пользователь сразу видел, на каких парах реально стартовал
+        бот — без этого в мультипарном режиме можно было подумать, что работает
+        только BTC/USDT (поскольку он логируется первым в каждом тике).
+        """
+        line = "=" * 64
+        logger.info(line)
+        logger.info("АКТИВНЫЕ ТОРГОВЫЕ ПАРЫ")
+        logger.info(line)
+        for uid, ctx in self.contexts.items():
+            symbols = list(ctx.engines.keys())
+            if not symbols:
+                logger.warning(f"  [{uid}] НЕТ АКТИВНЫХ ПАР — торговли не будет!")
+                continue
+            n = len(symbols)
+            per_pair = ctx.profile.per_pair_deposit_pct(n)
+            logger.info(
+                f"  [{uid}] {n} пар(ы): {', '.join(symbols)} | "
+                f"deposit_pct на пару={per_pair*100:.2f}% | "
+                f"leverage=x{ctx.profile.leverage} | "
+                f"{'TESTNET' if ctx.profile.is_testnet else 'LIVE'}"
+            )
+        logger.info(line)
+
+    def _notify_started_all(self):
+        """
+        Отправляет одно объединённое Telegram-уведомление о старте
+        на каждого пользователя — со списком всех активных пар.
+        """
+        for uid, ctx in self.contexts.items():
+            notifier = ctx.notifier
+            if not notifier:
+                continue
+            symbols = list(ctx.engines.keys())
+            if not symbols:
+                continue
+
+            # Берём баланс из первого движка (он уже проинициализирован)
+            balance = 0.0
+            first_engine = next(iter(ctx.engines.values()), None)
+            if first_engine:
+                try:
+                    bal = first_engine.exchange.fetch_balance()
+                    balance = bal.get("total", 0.0)
+                except Exception:
+                    pass
+
+            notifier.notify_bot_started_multi(
+                user_id=uid,
+                exchange=ctx.profile.exchange,
+                symbols=symbols,
+                balance=balance,
+                leverage=ctx.profile.leverage,
+                deposit_pct=ctx.profile.deposit_pct,
+                is_testnet=ctx.profile.is_testnet,
+            )
 
     def _log_tick_result(self, uid: str, symbol: str, result: Dict):
         status = result.get("status", "?")
