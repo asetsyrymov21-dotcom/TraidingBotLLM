@@ -218,7 +218,13 @@ class ExchangeConnector:
                 )
 
                 binance_symbol = self.profile.symbol.replace("/", "")
-                quantity = f"{amount:.3f}"
+                # Используем amount_to_precision чтобы соблюсти step size символа
+                try:
+                    quantity = self.public_exchange.amount_to_precision(
+                        self.profile.symbol, amount
+                    )
+                except Exception:
+                    quantity = f"{amount:.3f}"
 
                 params = {
                     "symbol": binance_symbol,
@@ -354,7 +360,8 @@ class ExchangeConnector:
 
     def calc_position_size(self, pct_of_balance: float, price: float) -> float:
         """
-        Временный упрощённый расчёт без market metadata.
+        Расчёт размера позиции с учётом precision конкретного символа.
+        Использует amount_to_precision чтобы не получить -1111 от Binance.
         """
         balance = self.fetch_balance()
         usdt_free = balance["free"]
@@ -372,8 +379,18 @@ class ExchangeConnector:
             return 0.0
 
         usdt_amount = usdt_free * pct_of_balance * self.profile.leverage
-        contracts = usdt_amount / price
-        contracts = round(contracts, 3)
+        contracts_raw = usdt_amount / price
+
+        # Округляем по правилам биржи для данного символа (step size)
+        # Это предотвращает ошибку -1111 "Precision is over the maximum defined"
+        try:
+            contracts_str = self.public_exchange.amount_to_precision(
+                self.profile.symbol, contracts_raw
+            )
+            contracts = float(contracts_str)
+        except Exception:
+            # Fallback: 3 знака (подходит для BTC/ETH, может не подойти для других)
+            contracts = round(contracts_raw, 3)
 
         if contracts <= 0:
             logger.warning(
@@ -382,4 +399,8 @@ class ExchangeConnector:
             )
             return 0.0
 
+        logger.info(
+            f"[{self.profile.user_id}] calc_position_size -> {contracts} "
+            f"(raw={contracts_raw:.6f}, symbol={self.profile.symbol})"
+        )
         return contracts
