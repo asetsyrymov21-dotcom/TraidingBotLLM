@@ -27,7 +27,7 @@ def setup_example_users():
         # deposit_pct делится поровну между всеми парами.
         symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
         top_n_symbols=0,  # 0 = ручной список symbols, >0 = авто топ-N
-        leverage=2,
+        leverage=10,
         deposit_pct=0.05,
         commission_pct=0.20,
         is_testnet=True,

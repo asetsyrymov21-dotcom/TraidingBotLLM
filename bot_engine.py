@@ -216,33 +216,41 @@ class BotEngine:
 
         result["mode"] = self._current_mode
 
-        # ── 4. Тик активной стратегии ──
-        if self._current_mode == "trend":
-            # TrendStrategy — основная стратегия по EMA crossover
+        # ── 4. Тик стратегий ──
+        # EntryStrategy — ГЛАВНАЯ (Win/Loss система).
+        # Первый вход — по 3 индикаторам (RSI+MACD+BB) только в тренде.
+        # Последующие — win/loss продолжение/переворот (в любом режиме).
+        entry_result = self.entry_bot.tick(snapshot)
+        result["actions"]["entry"] = entry_result
+
+        # TrendStrategy — вторичная, запускается только если EntryStrategy без позиции
+        if self.entry_bot.position is None and self._current_mode == "trend":
             trend_result = self.trend_bot.tick(snapshot)
             result["actions"]["trend"] = trend_result
 
-            # EntryStrategy — дополнительный вход по RSI+MACD+BB
-            # Запускаем только если TrendBot не открыл позицию в этот тик
-            # чтобы не открывать две позиции одновременно на одной паре
-            if self.trend_bot.state.position is None:
-                entry_result = self.entry_bot.tick(snapshot)
-                result["actions"]["entry"] = entry_result
+        # В wait-режиме управляем открытой позицией TrendStrategy
+        if self._current_mode == "wait" and self.trend_bot.state.position is not None:
+            trend_result = self.trend_bot.tick(snapshot)
+            result["actions"]["trend_manage"] = trend_result
 
-        elif self._current_mode == "wait":
-            # Флэт / неопределённость — ждём без сделок.
-            # Если есть открытая позиция от предыдущего тренда — управляем ею.
-            if self.trend_bot.state.position is not None:
-                trend_result = self.trend_bot.tick(snapshot)
-                result["actions"]["trend_manage"] = trend_result
-            elif self.entry_bot.position is not None:
-                entry_result = self.entry_bot.tick(snapshot)
-                result["actions"]["entry_manage"] = entry_result
-            else:
-                result["actions"]["wait"] = {"action": "waiting", "reason": "flat_market"}
-                logger.debug(
-                    f"[BOT:{self._log_label}] Флэт — ожидаем тренд"
+        # ── 5. Обновление футера Telegram (баланс + PnL + сумма в сделке) ──
+        if self.notifier:
+            session_pnl = (
+                self.entry_bot.total_pnl +
+                self.trend_bot.state.total_pnl
+            )
+            in_trade_amount = 0.0
+            if self.entry_bot.position:
+                in_trade_amount = (
+                    self.entry_bot.position.amount *
+                    self.entry_bot.position.entry_price
                 )
+            elif self.trend_bot.state.position:
+                in_trade_amount = (
+                    self.trend_bot.state.position.amount *
+                    self.trend_bot.state.position.entry_price
+                )
+            self.notifier.update_session_info(session_pnl, in_trade_amount)
 
         result["status"] = "ok"
         return result

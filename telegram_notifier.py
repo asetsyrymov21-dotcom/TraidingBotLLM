@@ -34,10 +34,17 @@ class TelegramNotifier:
         self.enabled = enabled
         self._base_url = f"https://api.telegram.org/bot{bot_token}"
         self._last_balance: Optional[float] = None   # Обновляется из BotEngine каждый тик
+        self._session_pnl: Optional[float] = None    # Суммарный PnL сессии
+        self._in_trade_amount: float = 0.0           # Сумма в открытой сделке (USDT)
 
     def update_balance(self, balance: float):
         """Обновляет текущий баланс — добавляется в конец каждого сообщения"""
         self._last_balance = balance
+
+    def update_session_info(self, session_pnl: float, in_trade_amount: float = 0.0):
+        """Обновляет PnL сессии и сумму в сделке — добавляется в футер каждого сообщения"""
+        self._session_pnl = session_pnl
+        self._in_trade_amount = in_trade_amount
 
     # ──────────────────────────────────────────
     #  Низкоуровневая отправка
@@ -48,9 +55,18 @@ class TelegramNotifier:
         if not self.enabled or not self.bot_token or not self.chat_id:
             return
 
-        # Добавляем баланс в конец каждого сообщения
+        # ── Футер: баланс + PnL сессии + сумма в сделке ──
+        footer_parts = []
         if self._last_balance is not None:
-            text += f"\n\n💼 <b>Баланс: {self._last_balance:.2f} USDT</b>"
+            footer_parts.append(f"💼 <b>{self._last_balance:.2f} USDT</b>")
+        if self._session_pnl is not None:
+            sign = "+" if self._session_pnl >= 0 else ""
+            emoji = "📈" if self._session_pnl >= 0 else "📉"
+            footer_parts.append(f"{emoji} PnL: <b>{sign}{self._session_pnl:.4f}</b>")
+        if self._in_trade_amount > 0:
+            footer_parts.append(f"🔄 В сделке: <b>{self._in_trade_amount:.2f} USDT</b>")
+        if footer_parts:
+            text += "\n\n" + " | ".join(footer_parts)
 
         def _do_send():
             try:
@@ -318,9 +334,11 @@ class TelegramNotifier:
         rsi: Optional[float] = None,
         macd_above: Optional[bool] = None,
         bb_above_mid: Optional[bool] = None,
+        symbol: str = "",
     ):
         side_emoji = "🟢 LONG" if side == "long" else "🔴 SHORT"
         direction = "вверх" if side == "long" else "вниз"
+        symbol_str = f"\n📊 <b>{symbol}</b>" if symbol else ""
 
         # Объясняем каждый индикатор человеческим языком
         explanations = []
@@ -354,13 +372,13 @@ class TelegramNotifier:
         )
 
         self._send_message(
-            f"🧠 <b>УМНЫЙ ВХОД: Открыта позиция</b>\n"
+            f"🧠 <b>ПЕРВЫЙ ВХОД (3 индикатора)</b>{symbol_str}\n"
             f"👤 {user_id}\n"
             f"🔹 {side_emoji} @ {price:.4f}\n"
             f"📦 Размер: {amount}\n"
-            f"🎯 TP: {tp:.4f} (+{abs(tp/price - 1)*100:.1f}%)\n"
-            f"🛑 SL: {sl:.4f} (-{abs(sl/price - 1)*100:.1f}%)\n\n"
-            f"💡 <i>Почему {side.upper()} ({conf_text}):</i>\n"
+            f"🎯 TP: {tp:.4f} (+{abs(tp/price - 1)*100:.2f}%)\n"
+            f"🛑 SL: {sl:.4f} (-{abs(sl/price - 1)*100:.2f}%)\n\n"
+            f"💡 <i>Сигнал {side.upper()} ({conf_text}):</i>\n"
             f"{bullets}"
         )
 
@@ -372,19 +390,65 @@ class TelegramNotifier:
         close_price: float,
         pnl: float,
         reason: str,
+        win_streak: int = 0,
+        loss_streak: int = 0,
+        symbol: str = "",
     ):
         pnl_emoji = "✅" if pnl > 0 else "❌"
         reason_text = {
-            "tp": "Take Profit — фиксация прибыли",
-            "sl": "Stop Loss — ограничение убытка",
+            "tp": "Take Profit — фиксируем прибыль",
+            "sl": "Stop Loss — ограничиваем убыток",
+            "emergency_squeeze": "🚨 Экстренный выход — цена упала на 15%+ против позиции",
+            "force_close": "Принудительное закрытие",
         }
+        symbol_str = f"\n📊 <b>{symbol}</b>" if symbol else ""
+        price_change_pct = (close_price - entry_price) / entry_price * 100
+        if side == "short":
+            price_change_pct = -price_change_pct
+        streak = f"🏆 Серия побед: {win_streak}" if win_streak > 0 else f"💀 Серия убытков: {loss_streak}"
+
         self._send_message(
-            f"{pnl_emoji} <b>УМНЫЙ ВХОД: Позиция закрыта</b>\n"
+            f"{pnl_emoji} <b>ПОЗИЦИЯ ЗАКРЫТА</b>{symbol_str}\n"
             f"👤 {user_id}\n"
             f"{'🟢' if side == 'long' else '🔴'} {side.upper()}\n"
-            f"📥 Вход: {entry_price:.4f} → 📤 Выход: {close_price:.4f}\n"
-            f"💰 PnL: {pnl:+.4f} USDT\n\n"
+            f"📥 Вход: {entry_price:.4f} → 📤 Выход: {close_price:.4f} ({price_change_pct:+.2f}%)\n"
+            f"💰 PnL: <b>{pnl:+.4f} USDT</b>\n"
+            f"{streak}\n\n"
             f"💡 <i>{reason_text.get(reason, reason)}</i>"
+        )
+
+    def notify_winloss_open(
+        self,
+        user_id: str,
+        side: str,
+        price: float,
+        amount: float,
+        tp: float,
+        sl: float,
+        reason: str = "",
+        win_streak: int = 0,
+        loss_streak: int = 0,
+        symbol: str = "",
+    ):
+        """Уведомление об открытии позиции по Win/Loss системе."""
+        side_emoji = "🟢 LONG" if side == "long" else "🔴 SHORT"
+        symbol_str = f"\n📊 <b>{symbol}</b>" if symbol else ""
+
+        if reason == "win_continue":
+            reason_text = f"✅ Предыдущая сделка — WIN (серия: {win_streak}). Продолжаем {side.upper()}"
+        elif reason == "loss_reverse":
+            reason_text = f"❌ Предыдущая сделка — LOSS (серия: {loss_streak}). Переворот → {side.upper()}"
+        else:
+            reason_text = reason
+
+        self._send_message(
+            f"⚡ <b>ОТКРЫТА ПОЗИЦИЯ</b>{symbol_str}\n"
+            f"👤 {user_id}\n"
+            f"🔹 {side_emoji} @ {price:.4f}\n"
+            f"📦 Размер: {amount}\n"
+            f"🎯 TP: {tp:.4f} (+{abs(tp/price - 1)*100:.2f}%)\n"
+            f"🛑 SL: {sl:.4f} (-{abs(sl/price - 1)*100:.2f}%)\n\n"
+            f"💡 <i>{reason_text}</i>"
         )
 
     # ──────────────────────────────────────────
@@ -440,55 +504,3 @@ class TelegramNotifier:
                 f"📥 Выставил BUY @ {new_price:.4f}\n"
                 f"💡 <i>Сетка работает — жду откат вниз</i>"
             )
-
-    # ──────────────────────────────────────────
-    #  Риск-менеджмент
-    # ──────────────────────────────────────────
-
-    def notify_risk_blocked(self, user_id: str, reason: str, daily_pnl_pct: str, drawdown_pct: str):
-        self._send_message(
-            f"🚨 <b>ТОРГОВЛЯ ЗАБЛОКИРОВАНА</b>\n"
-            f"👤 {user_id}\n"
-            f"📉 Дневной PnL: {daily_pnl_pct}\n"
-            f"📉 Просадка: {drawdown_pct}\n\n"
-            f"💡 <i>Причина: {reason}\n"
-            f"Бот приостановил торговлю для защиты депозита.\n"
-            f"Торговля возобновится автоматически на следующий день.</i>"
-        )
-
-    def notify_emergency_close(self, user_id: str):
-        self._send_message(
-            f"🆘 <b>ЭКСТРЕННОЕ ЗАКРЫТИЕ</b>\n"
-            f"👤 {user_id}\n"
-            f"Все позиции и ордера закрыты.\n\n"
-            f"💡 <i>Сработал риск-менеджер — депозит защищён.</i>"
-        )
-
-    # ──────────────────────────────────────────
-    #  Тик-саммари (опционально, раз в N тиков)
-    # ──────────────────────────────────────────
-
-    def notify_tick_summary(
-        self,
-        user_id: str,
-        tick: int,
-        price: float,
-        market_state: str,
-        mode: str,
-        daily_pnl: str,
-        drawdown: str,
-    ):
-        mode_name = {"grid": "GRID (флэт)", "trend": "ТРЕНД"}.get(mode, mode or "—")
-        state_emoji = {
-            "TREND_UP": "📈",
-            "TREND_DOWN": "📉",
-            "FLAT": "➡️",
-        }.get(market_state, "❓")
-
-        self._send_message(
-            f"📋 <b>Тик #{tick}</b>\n"
-            f"👤 {user_id}\n"
-            f"{state_emoji} Рынок: {market_state} | Режим: {mode_name}\n"
-            f"💲 Цена: {price:.4f}\n"
-            f"📊 Дневной PnL: {daily_pnl} | Просадка: {drawdown}"
-        )

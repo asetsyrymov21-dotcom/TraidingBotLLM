@@ -28,7 +28,7 @@ class MarketAnalyzerConfig:
     atr_period: int = 14
     atr_high_volatility_multiplier: float = 3.0  # ATR > avg_ATR * X → аномальная волатильность
     candle_limit: int = 200             # Кол-во свечей для расчёта
-    timeframe: str = "15m"              # Таймфрейм анализа
+    timeframe: str = "1m"               # Таймфрейм анализа (1m для быстрой торговли)
     volume_filter_period: int = 20      # Средний объём за N свечей для фильтра входа
 
 
@@ -45,8 +45,8 @@ class GridConfig:
 @dataclass
 class TrendBotConfig:
     """Параметры трендового бота"""
-    tp_pct: float = 0.015              # Take Profit 1.5% → R:R = 2.14:1 (было 1.2%, R:R=1.71:1)
-    sl_pct: float = 0.007              # Stop Loss 0.7%  (под 15m таймфрейм)
+    tp_pct: float = 0.002              # Take Profit 0.2%
+    sl_pct: float = 0.003              # Stop Loss 0.3%
     trail_pct: float = 0.006           # Trailing Stop: отступ от лучшей цены 0.6%
     trail_activate_pct: float = 0.004  # Trailing активируется при прибыли 0.4%
     base_position_pct: float = 0.05    # Базовый размер позиции 5%
@@ -54,7 +54,7 @@ class TrendBotConfig:
     min_position_pct: float = 0.02     # Мин позиция 2%
     win_scale_up: float = 1.2          # Множитель при серии побед
     loss_scale_down: float = 0.8       # Множитель при серии убытков
-    loss_streak_pause: int = 3         # Пауза после N убытков подряд
+    loss_streak_pause: int = 10        # Пауза после N убытков подряд
     pause_candles: int = 3             # Пауза в свечах после убытка
     delay_after_loss: int = 1          # Задержка свечей после убытка
     squeeze_threshold: float = 0.025   # Резкое движение против позиции > 2.5% → закрыть
@@ -74,9 +74,10 @@ class EntryBotConfig:
     macd_signal: int = 9
     bb_period: int = 20
     bb_std: float = 2.0
-    tp_pct: float = 0.02               # TP 2%
-    sl_pct: float = 0.01               # SL 1%
-    position_pct: float = 0.05         # 5% депозита
+    tp_pct: float = 0.002              # TP 0.2%
+    sl_pct: float = 0.003              # SL 0.3%
+    position_pct: float = 0.05         # 5% депозита на каждую пару
+    emergency_squeeze_pct: float = 0.15  # Экстренное закрытие при движении -15% против позиции
 
 
 @dataclass

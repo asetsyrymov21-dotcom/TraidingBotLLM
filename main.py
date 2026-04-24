@@ -463,9 +463,9 @@ def main():
         logger.error("Нет testnet-пользователей для запуска")
         return
 
-    # Интервал тика = 15 минут (соответствует таймфрейму 15m)
+    # Интервал тика = 20 секунд (соответствует таймфрейму 1m для быстрой торговли)
     # Можно переопределить через env: TICK_INTERVAL_SEC=60
-    tick_interval = int(os.environ.get("TICK_INTERVAL_SEC", 900))
+    tick_interval = int(os.environ.get("TICK_INTERVAL_SEC", 20))
     logger.info(f"Интервал тика: {tick_interval}s")
 
     try:
