@@ -57,7 +57,7 @@ class TrendBotConfig:
     loss_streak_pause: int = 10        # Пауза после N убытков подряд
     pause_candles: int = 3             # Пауза в свечах после убытка
     delay_after_loss: int = 1          # Задержка свечей после убытка
-    squeeze_threshold: float = 0.025   # Резкое движение против позиции > 2.5% → закрыть
+    squeeze_threshold: float = 0.15    # Резкое движение против позиции > 15% → закрыть
     max_atr_multiplier: float = 3.0    # Аномальная волатильность (ATR * X)
     rsi_long_min: float = 45.0         # RSI минимум для лонга (фильтр)
     rsi_short_max: float = 55.0        # RSI максимум для шорта (фильтр)

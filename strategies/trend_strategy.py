@@ -473,6 +473,54 @@ class TrendStrategy:
         """Анти-сквиз: аномально высокий ATR"""
         return snapshot.high_volatility
 
+    def manage_tp_sl_only(self, snapshot: MarketSnapshot) -> Dict:
+        """
+        Управляет позицией ТОЛЬКО через TP / Trail Stop / SL.
+        Используется в wait-режиме (флэт) — без anti-squeeze и без
+        volatility-проверок, чтобы позиция гарантированно дожила до TP/SL.
+        """
+        if not self.state.position:
+            return {"action": "none", "pnl": 0.0, "reason": "no_position"}
+
+        pos   = self.state.position
+        price = snapshot.close
+        result: Dict = {"action": "hold", "side": pos.side, "pnl": 0.0, "reason": ""}
+
+        # ── Обновление Trailing Stop ──
+        self._update_trailing_stop(pos, price)
+
+        # ── Проверка Trailing Stop ──
+        if pos.trail_active and pos.trail_stop_price is not None:
+            triggered = (
+                (pos.side == "long"  and price <= pos.trail_stop_price) or
+                (pos.side == "short" and price >= pos.trail_stop_price)
+            )
+            if triggered:
+                logger.info(
+                    f"{self._tag} [wait] TRAIL STOP | {pos.side.upper()} @ {price:.4f} "
+                    f"trail={pos.trail_stop_price:.4f}"
+                )
+                pnl = self._close_position(price, "trail_stop")
+                result.update({"action": "close_trail_stop", "pnl": pnl})
+                return result
+
+        # ── Проверка TP ──
+        if (pos.side == "long"  and price >= pos.tp_price) or \
+           (pos.side == "short" and price <= pos.tp_price):
+            pnl = self._close_position(price, "tp")
+            result.update({"action": "close_tp", "pnl": pnl})
+            return result
+
+        # ── Проверка SL (только если trailing ещё не активирован) ──
+        if not pos.trail_active:
+            if (pos.side == "long"  and price <= pos.sl_price) or \
+               (pos.side == "short" and price >= pos.sl_price):
+                pnl = self._close_position(price, "sl")
+                result.update({"action": "close_sl", "pnl": pnl})
+                return result
+
+        return result
+
     def force_close(self) -> float:
         """Принудительное закрытие позиции"""
         if self.state.position:

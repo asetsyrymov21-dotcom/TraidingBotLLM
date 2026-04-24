@@ -228,9 +228,10 @@ class BotEngine:
             trend_result = self.trend_bot.tick(snapshot)
             result["actions"]["trend"] = trend_result
 
-        # В wait-режиме управляем открытой позицией TrendStrategy
+        # В wait-режиме управляем позицией TrendStrategy ТОЛЬКО через TP/SL
+        # (без anti-squeeze, чтобы позиция не закрылась при переходе в флэт)
         if self._current_mode == "wait" and self.trend_bot.state.position is not None:
-            trend_result = self.trend_bot.tick(snapshot)
+            trend_result = self.trend_bot.manage_tp_sl_only(snapshot)
             result["actions"]["trend_manage"] = trend_result
 
         # ── 5. Обновление футера Telegram (баланс + PnL + сумма в сделке) ──

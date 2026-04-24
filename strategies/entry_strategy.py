@@ -135,11 +135,19 @@ class EntryStrategy:
 
         # ── WIN → продолжаем в том же направлении ──
         if self.last_result == "WIN":
+            if snapshot.state not in (MarketState.TREND_UP, MarketState.TREND_DOWN):
+                result["reason"] = "not_trending (win_continue_requires_trend)"
+                logger.info(f"{self._tag} skip | {result['reason']}")
+                return result
             direction = self.last_side
             logger.info(f"{self._tag} WIN continuation → {direction.upper()}")
             return self._open_in_direction(snapshot, direction, "win_continue")
 
         # ── LOSS → переворот ──
+        if snapshot.state not in (MarketState.TREND_UP, MarketState.TREND_DOWN):
+            result["reason"] = "not_trending (loss_reverse_requires_trend)"
+            logger.info(f"{self._tag} skip | {result['reason']}")
+            return result
         direction = "short" if self.last_side == "long" else "long"
         logger.info(f"{self._tag} LOSS reversal → {direction.upper()} (was {self.last_side})")
         return self._open_in_direction(snapshot, direction, "loss_reverse")
