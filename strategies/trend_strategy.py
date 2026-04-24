@@ -162,13 +162,6 @@ class TrendStrategy:
             result.update({"action": "close_squeeze", "pnl": pnl})
             return result
 
-        # ── Ранний выход по ADX: DI развернулись или тренд угасает ──
-        if adx_sig in ("exit_long", "exit_short"):
-            logger.info(f"{self._tag} ADX exit signal: {adx_sig} | Closing {pos.side} @ {price}")
-            pnl = self._close_position(price, f"adx_{adx_sig}")
-            result.update({"action": f"close_{adx_sig}", "pnl": pnl, "reason": adx_sig})
-            return result
-
         # ── Обновление Trailing Stop ──
         self._update_trailing_stop(pos, price)
 
