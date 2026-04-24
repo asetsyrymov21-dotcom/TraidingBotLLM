@@ -475,17 +475,4 @@ def main():
         logger.error("Нет testnet-пользователей для запуска")
         return
 
-    # Интервал тика = 20 секунд (соответствует таймфрейму 1m для быстрой торговли)
-    # Можно переопределить через env: TICK_INTERVAL_SEC=60
-    tick_interval = int(os.environ.get("TICK_INTERVAL_SEC", 20))
-    logger.info(f"Интервал тика: {tick_interval}s")
-
-    try:
-        runner.run(interval_seconds=tick_interval)
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt. Завершаем работу...")
-        runner._shutdown()
-
-
-if __name__ == "__main__":
-    main()
+    # Интервал тика = 20 секунд (соответствует
