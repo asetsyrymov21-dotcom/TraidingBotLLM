@@ -274,6 +274,17 @@ class ExchangeConnector:
             return order
 
         except Exception as e:
+            err_str = str(e)
+            # Binance -2022: ReduceOnly Order is rejected
+            # Позиция уже закрыта на бирже (TP/SL/ликвидация сработали раньше бота)
+            # Считаем это успехом — бот обновит своё внутреннее состояние корректно
+            if reduce_only and ("-2022" in err_str or "ReduceOnly Order is rejected" in err_str):
+                logger.warning(
+                    f"[{self.profile.user_id}] ReduceOnly rejected (-2022) — "
+                    f"позиция уже закрыта на бирже ({side} {amount} {self.profile.symbol}). "
+                    f"Считаем закрытой."
+                )
+                return {"orderId": "already_closed", "status": "FILLED", "executedQty": str(amount)}
             logger.error(f"place_market_order error ({side} {amount}): {e}")
             return None
 
