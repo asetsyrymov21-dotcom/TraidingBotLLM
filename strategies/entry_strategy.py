@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from config import EntryBotConfig
 from exchange import ExchangeConnector
-from market_analyzer import MarketSnapshot, MarketState
+from market_analyzer import MarketSnapshot
 
 if TYPE_CHECKING:
     from telegram_notifier import TelegramNotifier
@@ -113,13 +113,8 @@ class EntryStrategy:
             logger.info(f"{self._tag} skip | {result['reason']}")
             return result
 
-        # ── ПЕРВЫЙ ВХОД: по 3 индикаторам, только в тренде ──
+        # ── ПЕРВЫЙ ВХОД: по 3 индикаторам ──
         if self.last_result == "NONE":
-            if snapshot.state not in (MarketState.TREND_UP, MarketState.TREND_DOWN):
-                result["reason"] = "not_trending (first_entry_requires_trend)"
-                logger.info(f"{self._tag} skip | {result['reason']}")
-                return result
-
             signal = self._analyze_signal(snapshot)
             logger.info(
                 f"{self._tag} first_entry signal | side={signal.side} "
@@ -135,19 +130,11 @@ class EntryStrategy:
 
         # ── WIN → продолжаем в том же направлении ──
         if self.last_result == "WIN":
-            if snapshot.state not in (MarketState.TREND_UP, MarketState.TREND_DOWN):
-                result["reason"] = "not_trending (win_continue_requires_trend)"
-                logger.info(f"{self._tag} skip | {result['reason']}")
-                return result
             direction = self.last_side
             logger.info(f"{self._tag} WIN continuation → {direction.upper()}")
             return self._open_in_direction(snapshot, direction, "win_continue")
 
         # ── LOSS → переворот ──
-        if snapshot.state not in (MarketState.TREND_UP, MarketState.TREND_DOWN):
-            result["reason"] = "not_trending (loss_reverse_requires_trend)"
-            logger.info(f"{self._tag} skip | {result['reason']}")
-            return result
         direction = "short" if self.last_side == "long" else "long"
         logger.info(f"{self._tag} LOSS reversal → {direction.upper()} (was {self.last_side})")
         return self._open_in_direction(snapshot, direction, "loss_reverse")
@@ -222,14 +209,23 @@ class EntryStrategy:
             self.win_streak = 0
             self.pause_candles_left = 1  # Пауза 1 тик после убытка
 
-            # Серия 10+ убытков → пауза 20 минут
+            # Серия 10+ убытков → полный сброс, снова ищем вход по индикаторам
             if self.loss_streak >= 10:
-                pause_secs = 20 * 60
-                self.paused_until = time.time() + pause_secs
                 logger.warning(
                     f"{self._tag} Loss streak {self.loss_streak}! "
-                    f"Pausing {pause_secs // 60} minutes."
+                    f"Resetting to first-entry mode (RSI+MACD+BB)."
                 )
+                self.last_result = "NONE"
+                self.last_side = ""
+                self.win_streak = 0
+                self.loss_streak = 0
+                self.pause_candles_left = 1  # Ждём 1 тик перед новым входом
+
+                # Telegram: сброс после серии убытков
+                if self.notifier:
+                    self.notifier.notify_loss_streak_reset(
+                        self.user_id, symbol=self.symbol
+                    )
 
         logger.info(
             f"{self._tag} CLOSE {pos.side.upper()} @ {price:.4f} | "

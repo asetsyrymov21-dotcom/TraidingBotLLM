@@ -10,7 +10,7 @@ from typing import Optional, Dict
 
 from config import SystemConfig, UserProfile
 from exchange import ExchangeConnector
-from market_analyzer import MarketAnalyzer, MarketState, MarketSnapshot
+from market_analyzer import MarketAnalyzer, MarketSnapshot
 from strategies import TrendStrategy, EntryStrategy
 from risk_manager import RiskManager
 from telegram_notifier import TelegramNotifier
@@ -161,7 +161,6 @@ class BotEngine:
             return {"status": "insufficient_data"}
 
         self._last_snapshot = snapshot
-        result["market_state"] = snapshot.state.value
         result["price"] = snapshot.close
 
         # ── 2. Проверка риск-лимитов ──
@@ -192,27 +191,9 @@ class BotEngine:
             result["status"] = "risk_blocked"
             return result
 
-        # ── 3. Переключение стратегии ──
-        new_mode = self._determine_mode(snapshot)
-        old_mode = self._current_mode
-
-        if new_mode != old_mode:
-            self._switch_mode(snapshot, new_mode)
-            self._current_mode = new_mode
-            result["mode"] = self._current_mode
-            result["mode_switch"] = f"{old_mode} -> {new_mode}"
-
-            # Telegram: смена режима
-            if self.notifier:
-                self.notifier.notify_mode_switch(
-                    self.profile.user_id, old_mode, new_mode,
-                    snapshot.state.value, snapshot.close,
-                    adx=snapshot.adx,
-                    symbol=self.profile.symbol,
-                    ema_fast=snapshot.ema_fast,
-                    ema_slow=snapshot.ema_slow,
-                    atr=snapshot.atr,
-                )
+        # ── 3. Режим всегда "trend" — переключение только через SL ──
+        if self._current_mode != "trend":
+            self._current_mode = "trend"
 
         result["mode"] = self._current_mode
 
@@ -260,35 +241,12 @@ class BotEngine:
     #  Переключение режимов
     # ──────────────────────────────────────────
 
-    def _determine_mode(self, snapshot: MarketSnapshot) -> str:
-        """Определяет нужный режим на основе состояния рынка.
-        На флэте ждём тренд, не торгуем."""
-        if snapshot.state in (MarketState.TREND_UP, MarketState.TREND_DOWN):
-            return "trend"
-        return "wait"  # флэт / UNKNOWN → ожидание без сделок
-
     def _has_open_trend_positions(self) -> bool:
         """Проверяет есть ли открытые позиции от трендовых стратегий"""
         return (
             self.trend_bot.state.position is not None or
             self.entry_bot.position is not None
         )
-
-    def _switch_mode(self, snapshot: MarketSnapshot, new_mode: str):
-        """Переключает режим: trend / wait."""
-        logger.info(
-            f"[BOT:{self._log_label}] MODE SWITCH: "
-            f"{self._current_mode} -> {new_mode} | {snapshot.state.value}"
-        )
-
-        if self._current_mode == "trend" and new_mode == "wait":
-            # Уходим во флэт — НЕ закрываем позицию принудительно.
-            # Она дойдёт до TP или SL сама (управление продолжается в tick).
-            if self.trend_bot.state.position is not None:
-                logger.info(
-                    f"[BOT:{self._log_label}] Switching to wait — "
-                    f"trend position will close via TP/SL naturally"
-                )
 
     def _emergency_close(self):
         """Экстренное закрытие всех позиций"""

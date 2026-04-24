@@ -13,8 +13,7 @@ from typing import TYPE_CHECKING
 
 from config import TrendBotConfig
 from exchange import ExchangeConnector
-from market_analyzer import MarketSnapshot, MarketState
-from strategies.adx_logic import adx_signal, ADXConfig, Signal
+from market_analyzer import MarketSnapshot
 
 if TYPE_CHECKING:
     from telegram_notifier import TelegramNotifier
@@ -54,7 +53,6 @@ class TrendBotState:
     total_pnl: float = 0.0
     trade_count: int = 0
     win_count: int = 0
-    prev_adx: float = 0.0          # ADX прошлой свечи (для динамики)
 
 
 class TrendStrategy:
@@ -73,17 +71,14 @@ class TrendStrategy:
 
     def __init__(self, exchange: ExchangeConnector, cfg: TrendBotConfig,
                  notifier: Optional['TelegramNotifier'] = None, user_id: str = "",
-                 adx_cfg: ADXConfig = None, symbol: str = ""):
+                 symbol: str = ""):
         self.exchange = exchange
         self.cfg = cfg
         self.state = TrendBotState()
         self.notifier = notifier
         self.user_id = user_id
         self.symbol = symbol
-        # Тег для логов: "[TREND:BTC/USDT]" в мультипарном режиме.
         self._tag = f"[TREND:{symbol}]" if symbol else "[TREND]"
-        # ADX используется только для управления выходами, не для входов
-        self.adx_cfg = adx_cfg or ADXConfig(adx_strong=20.0, adx_weak=15.0)
 
     # ──────────────────────────────────────────
     #  Основной цикл
@@ -92,29 +87,6 @@ class TrendStrategy:
     def tick(self, snapshot: MarketSnapshot) -> Dict:
         """Вызывается каждую свечу"""
         result = {"action": "none", "side": None, "pnl": 0.0, "reason": ""}
-
-        # ── ADX-сигнал (вычисляем один раз на тик) ──
-        current_position = "none"
-        if self.state.position:
-            current_position = self.state.position.side
-
-        adx_sig: Signal = adx_signal(
-            adx      = snapshot.adx,
-            prev_adx = self.state.prev_adx,
-            plus_di  = snapshot.plus_di,
-            minus_di = snapshot.minus_di,
-            position = current_position,
-            cfg      = self.adx_cfg,
-        )
-        logger.info(
-            f"{self._tag} ADX signal: {adx_sig} | "
-            f"ADX={snapshot.adx:.1f}(prev={self.state.prev_adx:.1f}) "
-            f"+DI={snapshot.plus_di:.1f} -DI={snapshot.minus_di:.1f} "
-            f"pos={current_position}"
-        )
-
-        # Сохраняем ADX для следующего тика
-        self.state.prev_adx = snapshot.adx
 
         # ── Пауза при серии убытков ──
         if self.state.paused_until > time.time():
@@ -126,36 +98,26 @@ class TrendStrategy:
         # ── Задержка после убытка ──
         if self.state.pause_candles_left > 0:
             self.state.pause_candles_left -= 1
-            result["reason"] = (
-                f"delay_after_loss ({self.state.pause_candles_left} left)"
-            )
-            return result
-
-        # ── Анти-сквиз: аномальная волатильность ──
-        if self._check_abnormal_volatility(snapshot):
-            logger.warning(f"{self._tag} Abnormal volatility — skipping entry")
-            result["reason"] = "high_volatility"
-            if self.notifier:
-                self.notifier.notify_trend_skip(self.user_id, "high_volatility", snapshot.close, symbol=self.symbol)
+            result["reason"] = f"delay_after_loss ({self.state.pause_candles_left} left)"
             return result
 
         # ── Управление открытой позицией ──
         if self.state.position:
-            return self._manage_position(snapshot, adx_sig)
+            return self._manage_position(snapshot)
 
         # ── Поиск точки входа ──
-        return self._find_entry(snapshot, adx_sig)
+        return self._find_entry(snapshot)
 
     # ──────────────────────────────────────────
     #  Управление позицией
     # ──────────────────────────────────────────
 
-    def _manage_position(self, snapshot: MarketSnapshot, adx_sig: Signal) -> Dict:
+    def _manage_position(self, snapshot: MarketSnapshot) -> Dict:
         pos = self.state.position
         price = snapshot.close
         result = {"action": "hold", "side": pos.side, "pnl": 0.0, "reason": ""}
 
-        # ── Анти-сквиз: резкое движение против позиции ──
+        # ── Анти-сквиз: резкое движение против позиции (порог 15%) ──
         if self._check_squeeze(pos, price):
             logger.warning(f"{self._tag} SQUEEZE detected! Closing {pos.side} @ {price}")
             pnl = self._close_position(price, "squeeze")
@@ -200,53 +162,26 @@ class TrendStrategy:
 
         return result
 
-    def _find_entry(self, snapshot: MarketSnapshot, adx_sig: Signal) -> Dict:
+    def _find_entry(self, snapshot: MarketSnapshot) -> Dict:
         result = {"action": "none", "side": None, "pnl": 0.0, "reason": ""}
 
-        logger.info(
-            f"{self._tag} find_entry start | state={getattr(snapshot.state, 'value', snapshot.state)} "
-            f"close={snapshot.close} ema_fast={snapshot.ema_fast:.4f} "
-            f"ema_slow={snapshot.ema_slow:.4f} rsi={snapshot.rsi}"
-        )
-
-        # ── Фильтр: только торгуем в тренде ──
-        if snapshot.state not in (MarketState.TREND_UP, MarketState.TREND_DOWN):
-            result["reason"] = "not_trending"
-            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
-            return result
-
-        # ── EMA9/21 crossover — основной сигнал входа ──
-        # Быстро реагирует на разворот, не лагает как ADX на 15m
-        if snapshot.ema_fast > snapshot.ema_slow:
-            ema_side = "long"
-        elif snapshot.ema_fast < snapshot.ema_slow:
-            ema_side = "short"
-        else:
-            result["reason"] = "ema_neutral"
-            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
-            return result
-
-        logger.info(
-            f"{self._tag} ema_side={ema_side} | "
-            f"EMA9={snapshot.ema_fast:.4f} EMA21={snapshot.ema_slow:.4f}"
-        )
-
-        # ── RSI-фильтр (подтверждение импульса) ──
         rsi = snapshot.rsi or 50.0
-        rsi_long_min  = self.cfg.rsi_long_min
-        rsi_short_max = self.cfg.rsi_short_max
 
-        if ema_side == "long" and rsi < rsi_long_min:
-            result["reason"] = f"rsi_below_min ({rsi:.1f} < {rsi_long_min})"
+        logger.info(
+            f"{self._tag} find_entry | close={snapshot.close:.4f} RSI={rsi:.1f}"
+        )
+
+        # ── Направление по RSI ──
+        if rsi > self.cfg.rsi_long_min:
+            side = "long"
+        elif rsi < self.cfg.rsi_short_max:
+            side = "short"
+        else:
+            result["reason"] = f"rsi_neutral ({rsi:.1f})"
             logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
-        if ema_side == "short" and rsi > rsi_short_max:
-            result["reason"] = f"rsi_above_max ({rsi:.1f} > {rsi_short_max})"
-            logger.info(f"{self._tag} skip entry | reason={result['reason']}")
-            return result
-
-        # ── Фильтр объёма: блокируем только аномально тихие свечи (<60% среднего) ──
+        # ── Фильтр объёма: блокируем аномально тихие свечи (<60% среднего) ──
         if snapshot.avg_volume > 0 and snapshot.volume < snapshot.avg_volume * 0.6:
             result["reason"] = (
                 f"low_volume ({snapshot.volume:.0f} < 60% avg {snapshot.avg_volume:.0f})"
@@ -254,20 +189,9 @@ class TrendStrategy:
             logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
-        # ── Определение стороны (следуем EMA crossover) ──
-        side = self._determine_side(ema_side)
-        logger.info(
-            f"{self._tag} side determined | ema_side={ema_side} final_side={side}"
-        )
-
         # ── Расчёт размера позиции ──
         price = snapshot.close
         amount = self._calc_dynamic_size(price)
-
-        logger.info(
-            f"{self._tag} amount calculated | price={price:.4f} "
-            f"size_multiplier={self.state.current_size_multiplier} amount={amount}"
-        )
 
         if amount <= 0:
             result["reason"] = "insufficient_balance"
@@ -275,9 +199,7 @@ class TrendStrategy:
             return result
 
         # ── Открытие позиции ──
-        logger.info(f"{self._tag} calling place_market_order | side={side} amount={amount}")
         order = self.exchange.place_market_order(side, amount)
-        logger.info(f"{self._tag} place_market_order result | order={order}")
 
         if not order:
             result["reason"] = "order_failed"
@@ -299,42 +221,31 @@ class TrendStrategy:
             tp_price=tp_price,
             sl_price=sl_price,
             order_id=order.get("id"),
-            best_price=price,   # Начальное значение — цена входа
+            best_price=price,
         )
         self.state.trade_count += 1
 
         logger.info(
             f"{self._tag} OPEN {side.upper()} @ {price:.4f} | "
-            f"TP={tp_price:.4f} SL={sl_price:.4f} | "
-            f"Amount={amount} | RSI={rsi:.1f}"
+            f"TP={tp_price:.4f} SL={sl_price:.4f} | Amount={amount} | RSI={rsi:.1f}"
         )
 
         # Telegram: открыта позиция
         if self.notifier:
             self.notifier.notify_trend_open(
                 self.user_id, side, price, amount, tp_price, sl_price,
-                rsi, snapshot.ema_fast, snapshot.ema_slow,
+                rsi, 0.0, 0.0,
                 self.state.last_result.value, self.state.current_size_multiplier,
                 symbol=self.symbol,
-                atr=snapshot.atr,
                 leverage=self.exchange.profile.leverage,
             )
 
-        result.update({"action": f"open_{side}", "side": side, "reason": "trend_entry"})
+        result.update({"action": f"open_{side}", "side": side, "reason": "rsi_entry"})
         return result
 
     # ──────────────────────────────────────────
     #  Вспомогательные методы
     # ──────────────────────────────────────────
-
-    def _determine_side(self, trend_side: str) -> str:
-        """
-        Всегда следуем направлению ADX/DI.
-        Раньше была логика LOSS→переворот, но она открывала позиции
-        против тренда (ADX говорит short, бот открывал long после убытка).
-        ADX+DI — первичный сигнал, он отражает реальную динамику рынка.
-        """
-        return trend_side
 
     def _calc_dynamic_size(self, price: float) -> float:
         """Динамический размер позиции на основе серий"""
@@ -461,17 +372,13 @@ class TrendStrategy:
                     )
 
     def _check_squeeze(self, pos: ActivePosition, price: float) -> bool:
-        """Анти-сквиз: цена резко движется против позиции"""
+        """Анти-сквиз: цена движется против позиции > squeeze_threshold (15%)"""
         if pos.side == "long":
             drop = (pos.entry_price - price) / pos.entry_price
             return drop > self.cfg.squeeze_threshold
         else:
             rise = (price - pos.entry_price) / pos.entry_price
             return rise > self.cfg.squeeze_threshold
-
-    def _check_abnormal_volatility(self, snapshot: MarketSnapshot) -> bool:
-        """Анти-сквиз: аномально высокий ATR"""
-        return snapshot.high_volatility
 
     def manage_tp_sl_only(self, snapshot: MarketSnapshot) -> Dict:
         """

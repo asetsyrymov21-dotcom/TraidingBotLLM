@@ -19,16 +19,9 @@ SUPPORTED_EXCHANGES = ["binance", "bybit"]
 
 @dataclass
 class MarketAnalyzerConfig:
-    """Параметры определения состояния рынка"""
-    ema_fast: int = 9                   # EMA9 — быстрая (триггер)
-    ema_slow: int = 21                  # EMA21 — медленная (тренд)
-    adx_period: int = 14
-    adx_trend_threshold: float = 20.0   # ADX > 20 → тренд (снижено для 15m)
-    adx_flat_threshold: float = 15.0    # ADX < 15 → флэт (снижено для 15m)
-    atr_period: int = 14
-    atr_high_volatility_multiplier: float = 3.0  # ATR > avg_ATR * X → аномальная волатильность
-    candle_limit: int = 200             # Кол-во свечей для расчёта
-    timeframe: str = "1m"               # Таймфрейм анализа (1m для быстрой торговли)
+    """Параметры анализа рынка (RSI / MACD / BB)"""
+    candle_limit: int = 100             # Кол-во свечей (RSI+MACD+BB достаточно 100)
+    timeframe: str = "1m"               # Таймфрейм анализа
     volume_filter_period: int = 20      # Средний объём за N свечей для фильтра входа
 
 
