@@ -36,6 +36,9 @@ class TelegramNotifier:
         self._last_balance: Optional[float] = None   # Обновляется из BotEngine каждый тик
         self._session_pnl: Optional[float] = None    # Суммарный PnL сессии
         self._in_trade_amount: float = 0.0           # Сумма в открытой сделке (USDT)
+        # Пакетный режим: все сообщения тика объединяются в одно
+        self._batching: bool = False
+        self._buffer: list = []
 
     def update_balance(self, balance: float):
         """Обновляет текущий баланс — добавляется в конец каждого сообщения"""
@@ -50,24 +53,74 @@ class TelegramNotifier:
     #  Низкоуровневая отправка
     # ──────────────────────────────────────────
 
-    def _send_message(self, text: str):
-        """Отправляет сообщение в Telegram (в отдельном потоке)"""
-        if not self.enabled or not self.bot_token or not self.chat_id:
+    # ──────────────────────────────────────────
+    #  Пакетный режим (batch): все уведомления тика → одно TG-сообщение
+    # ──────────────────────────────────────────
+
+    def start_batch(self):
+        """Начать накопление сообщений. Вызывается перед тиком."""
+        self._buffer = []
+        self._batching = True
+
+    def flush_batch(self):
+        """
+        Отправить все накопленные сообщения одним TG-сообщением.
+        Вызывается после тика. Если буфер пустой — ничего не шлём.
+        """
+        self._batching = False
+        if not self._buffer:
             return
 
-        # ── Футер: баланс + PnL сессии + сумма в сделке ──
-        footer_parts = []
+        divider = "\n\n" + "─" * 22 + "\n\n"
+        combined = divider.join(self._buffer)
+
+        # Один общий футер в конце
+        footer = self._build_footer()
+        if footer:
+            combined += "\n\n" + footer
+
+        # Telegram лимит ~4096 символов
+        if len(combined) > 4000:
+            combined = combined[:3950] + "\n<i>...обрезано</i>"
+
+        self._send_raw(combined)
+        self._buffer = []
+
+    def _build_footer(self) -> str:
+        """Строит строку футера: баланс + PnL + сумма в сделке."""
+        parts = []
         if self._last_balance is not None:
-            footer_parts.append(f"💼 <b>{self._last_balance:.2f} USDT</b>")
+            parts.append(f"💼 <b>{self._last_balance:.2f} USDT</b>")
         if self._session_pnl is not None:
             sign = "+" if self._session_pnl >= 0 else ""
             emoji = "📈" if self._session_pnl >= 0 else "📉"
-            footer_parts.append(f"{emoji} PnL: <b>{sign}{self._session_pnl:.4f}</b>")
+            parts.append(f"{emoji} PnL: <b>{sign}{self._session_pnl:.4f}</b>")
         if self._in_trade_amount > 0:
-            footer_parts.append(f"🔄 В сделке: <b>{self._in_trade_amount:.2f} USDT</b>")
-        if footer_parts:
-            text += "\n\n" + " | ".join(footer_parts)
+            parts.append(f"🔄 В сделке: <b>{self._in_trade_amount:.2f} USDT</b>")
+        return " | ".join(parts)
 
+    def _send_message(self, text: str):
+        """
+        Отправляет сообщение.
+        В пакетном режиме — кладёт в буфер (без футера).
+        В обычном режиме — добавляет футер и шлёт сразу.
+        """
+        if not self.enabled or not self.bot_token or not self.chat_id:
+            return
+
+        if self._batching:
+            # Накапливаем без футера — он будет один в конце flush_batch
+            self._buffer.append(text)
+            return
+
+        # Обычная отправка с футером
+        footer = self._build_footer()
+        if footer:
+            text += "\n\n" + footer
+        self._send_raw(text)
+
+    def _send_raw(self, text: str):
+        """Низкоуровневая отправка в Telegram (в отдельном потоке)."""
         def _do_send():
             try:
                 encoded = quote_plus(text)
