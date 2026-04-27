@@ -117,6 +117,17 @@ class TrendStrategy:
         price = snapshot.close
         result = {"action": "hold", "side": pos.side, "pnl": 0.0, "reason": ""}
 
+        # ── Таймаут: позиция висит слишком долго ──
+        max_hold = getattr(self.cfg, 'max_hold_minutes', 240) * 60
+        if time.time() - pos.open_time > max_hold:
+            hours = (time.time() - pos.open_time) / 3600
+            logger.warning(
+                f"{self._tag} TIMEOUT! Position open for {hours:.1f}h > {max_hold//60}min. Force closing."
+            )
+            pnl = self._close_position(price, "timeout")
+            result.update({"action": "close_timeout", "pnl": pnl})
+            return result
+
         # ── Анти-сквиз: резкое движение против позиции (порог 15%) ──
         if self._check_squeeze(pos, price):
             logger.warning(f"{self._tag} SQUEEZE detected! Closing {pos.side} @ {price}")
