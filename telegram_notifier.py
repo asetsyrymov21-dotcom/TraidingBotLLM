@@ -370,6 +370,21 @@ class TelegramNotifier:
             f"💡 <i>Проверь логи (bot.log) и настройки API.</i>"
         )
 
+    def notify_risk_blocked(self, user_id: str, reason: str, daily_pnl: str, drawdown: str):
+        self._send_message(
+            f"⛔ <b>Торговля заблокирована</b>\n"
+            f"👤 {user_id}\n"
+            f"❗ Причина: {reason}\n"
+            f"📉 Дневной PnL: {daily_pnl} | Просадка: {drawdown}"
+        )
+
+    def notify_emergency_close(self, user_id: str):
+        self._send_message(
+            f"🚨 <b>Экстренное закрытие позиций</b>\n"
+            f"👤 {user_id}\n"
+            f"⚠️ Все позиции закрыты по риск-лимиту."
+        )
+
     # ──────────────────────────────────────────
     #  Стратегия умного входа (Entry)
     # ──────────────────────────────────────────

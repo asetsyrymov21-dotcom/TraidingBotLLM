@@ -276,11 +276,6 @@ class BotEngine:
             "trend_bot": self.trend_bot.get_stats(),
             "entry_bot": self.entry_bot.get_stats(),
             "market": {
-                "state": (
-                    self._last_snapshot.state.value
-                    if self._last_snapshot
-                    else "UNKNOWN"
-                ),
                 "price": self._last_snapshot.close if self._last_snapshot else 0,
             },
         }

@@ -90,7 +90,6 @@ class EntryStrategy:
 
         logger.info(
             f"{self._tag} tick | price={snapshot.close:.4f} "
-            f"state={getattr(snapshot.state, 'value', snapshot.state)} "
             f"has_position={self.position is not None} "
             f"last_result={self.last_result}"
         )
