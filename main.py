@@ -370,19 +370,27 @@ class MultiUserRunner:
             logger.debug(f"[{uid}:{symbol}] Тик: {status}")
 
     def _send_summary(self, uid: str, ctx: UserContext):
-        """Отправляет сводку по всем активным парам пользователя в Telegram."""
+        """Отправляет сводку только по парам с открытой позицией."""
         if not ctx.notifier:
             return
         for sym, engine in ctx.engines.items():
             snap = engine._last_snapshot
-            if snap:
-                ctx.notifier.notify_tick_summary(
-                    uid, self._global_tick, snap.close,
-                    engine._current_mode or "?",
-                    engine._last_risk_pnl_pct,
-                    engine._last_risk_drawdown_pct,
-                    symbol=sym,
-                )
+            if not snap:
+                continue
+            # Сводка только если есть открытая позиция — иначе нечего сообщать
+            has_position = (
+                engine.entry_bot.position is not None or
+                engine.trend_bot.state.position is not None
+            )
+            if not has_position:
+                continue
+            ctx.notifier.notify_tick_summary(
+                uid, self._global_tick, snap.close,
+                engine._current_mode or "?",
+                engine._last_risk_pnl_pct,
+                engine._last_risk_drawdown_pct,
+                symbol=sym,
+            )
 
 
 # ──────────────────────────────────────────
@@ -476,17 +484,4 @@ def main():
         logger.error("Нет testnet-пользователей для запуска")
         return
 
-    # Интервал тика = 20 секунд (соответствует таймфрейму 1m для быстрой торговли)
-    # Можно переопределить через env: TICK_INTERVAL_SEC=60
-    tick_interval = int(os.environ.get("TICK_INTERVAL_SEC", 20))
-    logger.info(f"Интервал тика: {tick_interval}s")
-
-    try:
-        runner.run(interval_seconds=tick_interval)
-    except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt. Завершаем работу...")
-        runner._shutdown()
-
-
-if __name__ == "__main__":
-    main()
+    # Интервал тика = 20 секунд (соответствует таймфрейму 1m для быс�
