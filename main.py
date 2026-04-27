@@ -484,4 +484,9 @@ def main():
     try:
         runner.run(interval_seconds=tick_interval)
     except KeyboardInterrupt:
-        logg
+        logger.info("KeyboardInterrupt. Завершаем работу...")
+        runner._shutdown()
+
+
+if __name__ == "__main__":
+    main()
