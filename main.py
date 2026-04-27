@@ -185,8 +185,10 @@ class MultiUserRunner:
         self.notifier = notifier
         self.contexts: Dict[str, UserContext] = {}
         self._stop_event = threading.Event()
-        self._tick_summary_interval = config.telegram.tick_summary_interval
         self._global_tick: int = 0
+        # Время последней отправки сводки (per user), unix timestamp
+        self._last_summary_time: Dict[str, float] = {}
+        self._summary_interval_sec: int = 30 * 60  # 30 минут
 
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -254,13 +256,14 @@ class MultiUserRunner:
                 for sym, result in tick_results.items():
                     self._log_tick_result(uid, sym, result)
 
-                # Telegram: периодический саммари
+                # Telegram: периодический саммари (раз в 30 минут)
+                now = time.time()
                 if (
                     self.notifier
-                    and self._tick_summary_interval > 0
-                    and self._global_tick % self._tick_summary_interval == 0
+                    and now - self._last_summary_time.get(uid, 0) >= self._summary_interval_sec
                 ):
                     self._send_summary(uid, ctx)
+                    self._last_summary_time[uid] = now
 
             # Ждём следующий тик (по 1 сек — мгновенный Ctrl+C)
             for _ in range(interval_seconds):
@@ -367,10 +370,9 @@ class MultiUserRunner:
             logger.debug(f"[{uid}:{symbol}] Тик: {status}")
 
     def _send_summary(self, uid: str, ctx: UserContext):
-        """Отправляет сводку по всем парам пользователя в Telegram."""
+        """Отправляет сводку по всем активным парам пользователя в Telegram."""
         if not ctx.notifier:
             return
-        # Используем первый попавшийся движок с данными для метрик
         for sym, engine in ctx.engines.items():
             snap = engine._last_snapshot
             if snap:
@@ -379,8 +381,8 @@ class MultiUserRunner:
                     engine._current_mode or "?",
                     engine._last_risk_pnl_pct,
                     engine._last_risk_drawdown_pct,
+                    symbol=sym,
                 )
-                break
 
 
 # ──────────────────────────────────────────
@@ -482,9 +484,4 @@ def main():
     try:
         runner.run(interval_seconds=tick_interval)
     except KeyboardInterrupt:
-        logger.info("KeyboardInterrupt. Завершаем работу...")
-        runner._shutdown()
-
-
-if __name__ == "__main__":
-    main()
+        logg

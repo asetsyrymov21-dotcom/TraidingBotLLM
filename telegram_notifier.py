@@ -555,11 +555,12 @@ class TelegramNotifier:
 
     def notify_tick_summary(
         self, user_id: str, tick: int, price: float,
-        mode: str, daily_pnl: str, drawdown: str,
+        mode: str, daily_pnl: str, drawdown: str, symbol: str = "",
     ):
+        symbol_str = f"\n📊 Пара: <b>{symbol}</b>" if symbol else ""
         self._send_message(
-            f"📊 <b>Сводка #{tick}</b>\n"
-            f"👤 {user_id}\n"
+            f"📊 <b>Сводка</b>\n"
+            f"👤 {user_id}{symbol_str}\n"
             f"💰 Цена: {price:.4f}\n"
             f"⚙️ Режим: {mode}\n"
             f"📉 Дневной PnL: {daily_pnl} | Просадка: {drawdown}"
@@ -590,6 +591,6 @@ class TelegramNotifier:
                 f"\U0001f532 <b>GRID: SELL исполнен</b>\n"
                 f"\U0001f464 {user_id}\n"
                 f"\U0001f4e4 Продал @ {filled_price:.4f}\n"
-                f"\U0001f4e5 Выставил BUY @ {new_price:.4f}\n"
-                f"\U0001f4a1 <i>Сетка работает</i>"
+                f"\U0001f4e5 \u0412\u044b\u0441\u0442\u0430\u0432\u0438\u043b BUY @ {new_price:.4f}\n"
+                f"\U0001f4a1 <i>\u0421\u0435\u0442\u043a\u0430 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442</i>"
             )
