@@ -119,6 +119,18 @@ class TelegramNotifier:
             text += "\n\n" + footer
         self._send_raw(text)
 
+    def _send_urgent(self, text: str):
+        """
+        Немедленная отправка вне батча — для важных событий (закрытие позиции).
+        Всегда уходит отдельным сообщением, даже если батч активен.
+        """
+        if not self.enabled or not self.bot_token or not self.chat_id:
+            return
+        footer = self._build_footer()
+        if footer:
+            text += "\n\n" + footer
+        self._send_raw(text)
+
     def _send_raw(self, text: str):
         """Низкоуровневая отправка в Telegram (в отдельном потоке)."""
         def _do_send():
@@ -339,7 +351,7 @@ class TelegramNotifier:
             "trail_stop": f"📉 Trailing Stop — цена откатилась от максимума, фиксируем прибыль ({move_pct:.2f}%)",
         }
 
-        self._send_message(
+        self._send_urgent(
             f"{pnl_emoji} <b>ТРЕНД: Позиция закрыта</b>\n"
             f"👤 {user_id}{symbol_str}\n"
             f"{'🟢' if side == 'long' else '🔴'} {side.upper()}\n"
@@ -486,7 +498,7 @@ class TelegramNotifier:
             "force_close": "⛔ Принудительное закрытие — бот остановлен или достигнут риск-лимит",
         }
 
-        self._send_message(
+        self._send_urgent(
             f"{pnl_emoji} <b>ПОЗИЦИЯ ЗАКРЫТА</b>{symbol_str}\n"
             f"👤 {user_id}\n"
             f"{'🟢' if side == 'long' else '🔴'} {side.upper()}\n"
@@ -580,28 +592,8 @@ class TelegramNotifier:
     def notify_loss_streak_reset(self, user_id: str, symbol: str = ""):
         sym = f" [{symbol}]" if symbol else ""
         self._send_message(
-            f"🔄 <b>СБРОС после 10 убытков{sym}</b>\n"
+            f"🔄 <b>Сброс после 10 убытков{sym}</b>\n"
             f"👤 {user_id}\n"
             f"📊 Серия из 10 минусовых сделок подряд.\n"
             f"🔍 Жду новый сигнал по RSI + MACD + BB для входа."
         )
-
-    def notify_grid_fill(
-        self, user_id: str, filled_side: str, filled_price: float, new_price: float
-    ):
-        if filled_side == "buy":
-            self._send_message(
-                f"\U0001f532 <b>GRID: BUY исполнен</b>\n"
-                f"\U0001f464 {user_id}\n"
-                f"\U0001f4e5 Купил @ {filled_price:.4f}\n"
-                f"\U0001f4e4 Выставил SELL @ {new_price:.4f}\n"
-                f"\U0001f4a1 <i>Сетка работает</i>"
-            )
-        else:
-            self._send_message(
-                f"\U0001f532 <b>GRID: SELL исполнен</b>\n"
-                f"\U0001f464 {user_id}\n"
-                f"\U0001f4e4 Продал @ {filled_price:.4f}\n"
-                f"\U0001f4e5 \u0412\u044b\u0441\u0442\u0430\u0432\u0438\u043b BUY @ {new_price:.4f}\n"
-                f"\U0001f4a1 <i>\u0421\u0435\u0442\u043a\u0430 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442</i>"
-            )
