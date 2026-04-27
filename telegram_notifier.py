@@ -590,4 +590,18 @@ class TelegramNotifier:
         self, user_id: str, filled_side: str, filled_price: float, new_price: float
     ):
         if filled_side == "buy":
-            self._send_message
+            self._send_message(
+                f"\U0001f532 <b>GRID: BUY исполнен</b>\n"
+                f"\U0001f464 {user_id}\n"
+                f"\U0001f4e5 Купил @ {filled_price:.4f}\n"
+                f"\U0001f4e4 Выставил SELL @ {new_price:.4f}\n"
+                f"\U0001f4a1 <i>Сетка работает</i>"
+            )
+        else:
+            self._send_message(
+                f"\U0001f532 <b>GRID: SELL исполнен</b>\n"
+                f"\U0001f464 {user_id}\n"
+                f"\U0001f4e4 Продал @ {filled_price:.4f}\n"
+                f"\U0001f4e5 \u0412\u044b\u0441\u0442\u0430\u0432\u0438\u043b BUY @ {new_price:.4f}\n"
+                f"\U0001f4a1 <i>\u0421\u0435\u0442\u043a\u0430 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442</i>"
+            )
