@@ -553,6 +553,18 @@ class TelegramNotifier:
             f"Бот переоценит рынок на следующем тике.</i>"
         )
 
+    def notify_tick_summary(
+        self, user_id: str, tick: int, price: float,
+        mode: str, daily_pnl: str, drawdown: str,
+    ):
+        self._send_message(
+            f"📊 <b>Сводка #{tick}</b>\n"
+            f"👤 {user_id}\n"
+            f"💰 Цена: {price:.4f}\n"
+            f"⚙️ Режим: {mode}\n"
+            f"📉 Дневной PnL: {daily_pnl} | Просадка: {drawdown}"
+        )
+
     def notify_loss_streak_reset(self, user_id: str, symbol: str = ""):
         sym = f" [{symbol}]" if symbol else ""
         self._send_message(
@@ -571,7 +583,7 @@ class TelegramNotifier:
                 f"\U0001f464 {user_id}\n"
                 f"\U0001f4e5 Купил @ {filled_price:.4f}\n"
                 f"\U0001f4e4 Выставил SELL @ {new_price:.4f}\n"
-                f"\U0001f4a1 <i>Сетка работает — жду отскок вверх</i>"
+                f"\U0001f4a1 <i>Сетка работает</i>"
             )
         else:
             self._send_message(
@@ -579,5 +591,5 @@ class TelegramNotifier:
                 f"\U0001f464 {user_id}\n"
                 f"\U0001f4e4 Продал @ {filled_price:.4f}\n"
                 f"\U0001f4e5 Выставил BUY @ {new_price:.4f}\n"
-                f"\U0001f4a1 <i>Сетка работает — жду откат вниз</i>"
+                f"\U0001f4a1 <i>Сетка работает</i>"
             )

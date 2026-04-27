@@ -351,14 +351,13 @@ class MultiUserRunner:
     def _log_tick_result(self, uid: str, symbol: str, result: Dict):
         status = result.get("status", "?")
         if status == "ok":
-            market = result.get("market_state", "?")
             price = result.get("price", 0)
             mode = result.get("mode", "?")
             risk = result.get("risk", {})
             tick = result.get("tick", 0)
             logger.info(
                 f"[{uid}:{symbol}] Тик #{tick} | "
-                f"Market={market} | Mode={mode} | Price={price:.4f} | "
+                f"Mode={mode} | Price={price:.4f} | "
                 f"DayPnL={risk.get('daily_pnl_pct', '?')} | "
                 f"DD={risk.get('drawdown_pct', '?')}"
             )
@@ -377,7 +376,7 @@ class MultiUserRunner:
             if snap:
                 ctx.notifier.notify_tick_summary(
                     uid, self._global_tick, snap.close,
-                    snap.state.value, engine._current_mode or "?",
+                    engine._current_mode or "?",
                     engine._last_risk_pnl_pct,
                     engine._last_risk_drawdown_pct,
                 )
