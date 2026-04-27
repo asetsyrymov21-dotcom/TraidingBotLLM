@@ -239,6 +239,8 @@ class EntryStrategy:
                 win_streak=self.win_streak,
                 loss_streak=self.loss_streak,
                 symbol=self.symbol,
+                tp_price=pos.tp_price,
+                sl_price=pos.sl_price,
             )
 
         self.position = None
@@ -528,5 +530,4 @@ class EntryStrategy:
             "loss_streak": self.loss_streak,
             "last_result": self.last_result,
             "last_side": self.last_side,
-            "has_position": self.position is not None,
         }

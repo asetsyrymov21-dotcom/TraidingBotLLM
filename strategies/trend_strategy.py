@@ -326,6 +326,8 @@ class TrendStrategy:
                 self.user_id, pos.side, pos.entry_price, price, pnl, reason,
                 self.state.win_streak, self.state.loss_streak,
                 symbol=self.symbol,
+                tp_price=pos.tp_price,
+                sl_price=pos.sl_price,
             )
 
         self.state.position = None
@@ -445,6 +447,5 @@ class TrendStrategy:
             "win_rate": round(winrate, 1),
             "win_streak": self.state.win_streak,
             "loss_streak": self.state.loss_streak,
-            "size_multiplier": round(self.state.current_size_multiplier, 3),
-            "has_position": self.state.position is not None,
+            "size_multiplier": round(self.state.current_size_multiplier, 2),
         }

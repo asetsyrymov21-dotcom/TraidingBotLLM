@@ -315,25 +315,29 @@ class TelegramNotifier:
         win_streak: int,
         loss_streak: int,
         symbol: str = "",
+        tp_price: Optional[float] = None,
+        sl_price: Optional[float] = None,
     ):
         is_win = pnl > 0
         pnl_emoji = "✅" if is_win else "❌"
-
-        reason_text = {
-            "tp": "Цена достигла Take Profit — фиксируем прибыль",
-            "sl": "Цена достигла Stop Loss — ограничиваем убыток",
-            "squeeze": "Обнаружен сквиз (резкое движение против позиции) — экстренный выход",
-            "force_close": "Принудительное закрытие (остановка бота или смена режима)",
-            "trail_stop": "Trailing Stop сработал — фиксируем прибыль",
-            "adx_exit_long": "ADX сигнал: разворот из лонга",
-            "adx_exit_short": "ADX сигнал: разворот из шорта",
-        }
 
         symbol_str = f"\n📊 Пара: <b>{symbol}</b>" if symbol else ""
         streak = f"🏆 Серия побед: {win_streak}" if win_streak > 0 else f"💀 Серия убытков: {loss_streak}"
         price_change_pct = (close_price - entry_price) / entry_price * 100
         if side == "short":
             price_change_pct = -price_change_pct
+        move_pct = abs(price_change_pct)
+
+        tp_str = f" (уровень: {tp_price:.4f})" if tp_price else ""
+        sl_str = f" (уровень: {sl_price:.4f})" if sl_price else ""
+
+        reason_text = {
+            "tp": f"🎯 Take Profit сработал{tp_str} — цена прошла {move_pct:.2f}% в нашу сторону",
+            "sl": f"🛑 Stop Loss сработал{sl_str} — цена пошла {move_pct:.2f}% против позиции",
+            "squeeze": f"🚨 Анти-сквиз — резкое движение {move_pct:.1f}% против позиции, экстренный выход",
+            "force_close": "⛔ Принудительное закрытие — бот остановлен или достигнут риск-лимит",
+            "trail_stop": f"📉 Trailing Stop — цена откатилась от максимума, фиксируем прибыль ({move_pct:.2f}%)",
+        }
 
         self._send_message(
             f"{pnl_emoji} <b>ТРЕНД: Позиция закрыта</b>\n"
@@ -461,19 +465,26 @@ class TelegramNotifier:
         win_streak: int = 0,
         loss_streak: int = 0,
         symbol: str = "",
+        tp_price: Optional[float] = None,
+        sl_price: Optional[float] = None,
     ):
         pnl_emoji = "✅" if pnl > 0 else "❌"
-        reason_text = {
-            "tp": "Take Profit — фиксируем прибыль",
-            "sl": "Stop Loss — ограничиваем убыток",
-            "emergency_squeeze": "🚨 Экстренный выход — цена упала на 15%+ против позиции",
-            "force_close": "Принудительное закрытие",
-        }
         symbol_str = f"\n📊 <b>{symbol}</b>" if symbol else ""
         price_change_pct = (close_price - entry_price) / entry_price * 100
         if side == "short":
             price_change_pct = -price_change_pct
         streak = f"🏆 Серия побед: {win_streak}" if win_streak > 0 else f"💀 Серия убытков: {loss_streak}"
+
+        tp_str = f" (уровень: {tp_price:.4f})" if tp_price else ""
+        sl_str = f" (уровень: {sl_price:.4f})" if sl_price else ""
+        move_pct = abs(price_change_pct)
+
+        reason_text = {
+            "tp": f"🎯 Take Profit сработал{tp_str} — цена прошла {move_pct:.2f}% в нашу сторону",
+            "sl": f"🛑 Stop Loss сработал{sl_str} — цена пошла {move_pct:.2f}% против позиции",
+            "emergency_squeeze": f"🚨 Анти-сквиз — цена упала {move_pct:.1f}% против позиции, принудительный выход",
+            "force_close": "⛔ Принудительное закрытие — бот остановлен или достигнут риск-лимит",
+        }
 
         self._send_message(
             f"{pnl_emoji} <b>ПОЗИЦИЯ ЗАКРЫТА</b>{symbol_str}\n"
@@ -579,18 +590,4 @@ class TelegramNotifier:
         self, user_id: str, filled_side: str, filled_price: float, new_price: float
     ):
         if filled_side == "buy":
-            self._send_message(
-                f"\U0001f532 <b>GRID: BUY исполнен</b>\n"
-                f"\U0001f464 {user_id}\n"
-                f"\U0001f4e5 Купил @ {filled_price:.4f}\n"
-                f"\U0001f4e4 Выставил SELL @ {new_price:.4f}\n"
-                f"\U0001f4a1 <i>Сетка работает</i>"
-            )
-        else:
-            self._send_message(
-                f"\U0001f532 <b>GRID: SELL исполнен</b>\n"
-                f"\U0001f464 {user_id}\n"
-                f"\U0001f4e4 Продал @ {filled_price:.4f}\n"
-                f"\U0001f4e5 \u0412\u044b\u0441\u0442\u0430\u0432\u0438\u043b BUY @ {new_price:.4f}\n"
-                f"\U0001f4a1 <i>\u0421\u0435\u0442\u043a\u0430 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442</i>"
-            )
+            self._send_message
