@@ -15,14 +15,6 @@ SETTINGS_FILE = os.path.join("data", "dynamic_settings.json")
 
 # Значения по умолчанию — совпадают с config.py
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    # ATR-адаптивный TP/SL
-    "atr_quiet_threshold":    0.003,   # ATR% < 0.3% → тихий
-    "atr_volatile_threshold": 0.008,   # ATR% > 0.8% → волатильный
-    "tp_quiet":               0.002,   # TP 0.2%
-    "tp_normal":              0.005,   # TP 0.5%
-    "tp_volatile":            0.010,   # TP 1.0%
-    "sl_multiplier":          8.0,     # SL = TP × 8
-
     # Общие
     "leverage":               3,
     "position_pct":           0.05,    # 5% депозита на пару
@@ -84,12 +76,6 @@ def apply_to_config(cfg) -> None:
     if not _cache:
         load()
     s = _cache
-
-    # ATR-адаптивный TP/SL
-    for attr in ("atr_quiet_threshold", "atr_volatile_threshold",
-                 "tp_quiet", "tp_normal", "tp_volatile", "sl_multiplier"):
-        if attr in s and hasattr(cfg, attr):
-            setattr(cfg, attr, s[attr])
 
     # Общие
     if "max_hold_minutes" in s and hasattr(cfg, "max_hold_minutes"):

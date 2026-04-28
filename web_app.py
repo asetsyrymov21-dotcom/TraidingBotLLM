@@ -245,74 +245,6 @@ HTML = """<!DOCTYPE html>
 <!-- Pair status cards -->
 <div id="pairs-section"></div>
 
-<!-- ATR Settings -->
-<div class="section">
-  <div class="section-header">📊 ATR — адаптивный TP/SL</div>
-
-  <div class="setting-row">
-    <div class="setting-label">
-      <span class="setting-name">Порог тихого рынка (ATR%)</span>
-      <span class="setting-val" id="val-atr_quiet_threshold">—</span>
-    </div>
-    <input type="range" id="atr_quiet_threshold"
-      min="0.1" max="0.8" step="0.05"
-      oninput="onSlider('atr_quiet_threshold', this.value, '%', 100)">
-    <div class="setting-hint">Ниже этого значения → тихий рынок (маленький TP)</div>
-  </div>
-
-  <div class="setting-row">
-    <div class="setting-label">
-      <span class="setting-name">Порог волатильного рынка (ATR%)</span>
-      <span class="setting-val" id="val-atr_volatile_threshold">—</span>
-    </div>
-    <input type="range" id="atr_volatile_threshold"
-      min="0.3" max="2.0" step="0.05"
-      oninput="onSlider('atr_volatile_threshold', this.value, '%', 100)">
-    <div class="setting-hint">Выше этого значения → волатильный рынок (большой TP)</div>
-  </div>
-
-  <div class="setting-row">
-    <div class="setting-label">
-      <span class="setting-name">TP — тихий рынок</span>
-      <span class="setting-val" id="val-tp_quiet">—</span>
-    </div>
-    <input type="range" id="tp_quiet"
-      min="0.05" max="0.5" step="0.05"
-      oninput="onSlider('tp_quiet', this.value, '%', 100)">
-  </div>
-
-  <div class="setting-row">
-    <div class="setting-label">
-      <span class="setting-name">TP — нормальный рынок</span>
-      <span class="setting-val" id="val-tp_normal">—</span>
-    </div>
-    <input type="range" id="tp_normal"
-      min="0.1" max="1.5" step="0.05"
-      oninput="onSlider('tp_normal', this.value, '%', 100)">
-  </div>
-
-  <div class="setting-row">
-    <div class="setting-label">
-      <span class="setting-name">TP — волатильный рынок</span>
-      <span class="setting-val" id="val-tp_volatile">—</span>
-    </div>
-    <input type="range" id="tp_volatile"
-      min="0.3" max="3.0" step="0.1"
-      oninput="onSlider('tp_volatile', this.value, '%', 100)">
-  </div>
-
-  <div class="setting-row">
-    <div class="setting-label">
-      <span class="setting-name">SL множитель (SL = TP × N)</span>
-      <span class="setting-val" id="val-sl_multiplier">—</span>
-    </div>
-    <input type="range" id="sl_multiplier"
-      min="3" max="15" step="0.5"
-      oninput="onSlider('sl_multiplier', this.value, 'x', 1)">
-    <div class="setting-hint">Итоговый SL = TP% × этот множитель</div>
-  </div>
-</div>
-
 <!-- General Settings -->
 <div class="section">
   <div class="section-header">⚙️ Общие настройки</div>
@@ -386,12 +318,6 @@ async function loadSettings() {
 
 function applySettingsToUI(data) {
   const fields = [
-    ['atr_quiet_threshold',    100, '%'],
-    ['atr_volatile_threshold', 100, '%'],
-    ['tp_quiet',               100, '%'],
-    ['tp_normal',              100, '%'],
-    ['tp_volatile',            100, '%'],
-    ['sl_multiplier',          1,   'x'],
     ['max_hold_minutes',       1,   'мин'],
     ['position_pct',           100, '%'],
     ['rsi_long_threshold',     1,   ''],
