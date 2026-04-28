@@ -256,14 +256,8 @@ class MultiUserRunner:
                 for sym, result in tick_results.items():
                     self._log_tick_result(uid, sym, result)
 
-                # Telegram: периодический саммари (раз в 30 минут)
+                # Telegram: периодический саммари — отключён
                 now = time.time()
-                if (
-                    self.notifier
-                    and now - self._last_summary_time.get(uid, 0) >= self._summary_interval_sec
-                ):
-                    self._send_summary(uid, ctx)
-                    self._last_summary_time[uid] = now
 
             # Ждём следующий тик (по 1 сек — мгновенный Ctrl+C)
             for _ in range(interval_seconds):

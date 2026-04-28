@@ -159,4 +159,8 @@ class UserProfile:
             cfg.entry_bot.tp_pct = cc["tp_pct"]
         if "sl_pct" in cc:
             cfg.trend_bot.sl_pct = cc["sl_pct"]
-      
+            cfg.entry_bot.sl_pct = cc["sl_pct"]
+        if "deposit_pct" in cc:
+            cfg.trend_bot.base_position_pct = cc["deposit_pct"]
+            cfg.entry_bot.position_pct = cc["deposit_pct"]
+        return cfg
