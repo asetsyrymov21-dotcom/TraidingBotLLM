@@ -146,25 +146,22 @@ class UserContext:
     def tick_all(self) -> Dict[str, Dict]:
         """
         Запускает тик на всех активных движках.
-        Все Telegram-уведомления за тик объединяются в одно сообщение.
+        Каждая пара — своё отдельное Telegram-сообщение.
         """
-        # Начинаем пакетный режим — все сообщения накапливаются в буфере
-        if self.notifier:
-            self.notifier.start_batch()
-
         results = {}
         for sym, engine in list(self.engines.items()):
             if not engine.is_running:
                 continue
+            # Батч только для одной пары — уведомления по каждой паре отдельно
+            if self.notifier:
+                self.notifier.start_batch()
             try:
                 results[sym] = engine.tick()
             except Exception as e:
                 logger.error(f"[{self.user_id}:{sym}] Ошибка тика: {e}", exc_info=True)
                 results[sym] = {"status": "error", "message": str(e)}
-
-        # Отправляем все накопленные уведомления одним TG-сообщением
-        if self.notifier:
-            self.notifier.flush_batch()
+            if self.notifier:
+                self.notifier.flush_batch()
 
         return results
 
