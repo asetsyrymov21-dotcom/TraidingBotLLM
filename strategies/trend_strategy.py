@@ -222,8 +222,8 @@ class TrendStrategy:
                 )
             return result
 
-        # ── Расчёт TP/SL ──
-        tp_price, sl_price = self._calc_tp_sl(price, side)
+        # ── Расчёт TP/SL (ATR-адаптивный) ──
+        tp_price, sl_price = self._calc_tp_sl(price, side, snapshot=snapshot)
 
         self.state.position = ActivePosition(
             side=side,
@@ -267,14 +267,40 @@ class TrendStrategy:
         base_pct = max(cfg.min_position_pct, min(cfg.max_position_pct, base_pct))
         return self.exchange.calc_position_size(base_pct, price)
 
-    def _calc_tp_sl(self, price: float, side: str):
-        """Рассчитывает TP и SL"""
-        if side == "long":
-            tp = price * (1 + self.cfg.tp_pct)
-            sl = price * (1 - self.cfg.sl_pct)
+    def _calc_tp_sl(self, price: float, side: str, snapshot=None):
+        """Рассчитывает TP и SL с ATR-адаптацией."""
+        atr_pct = (snapshot.atr_pct or 0.0) if snapshot else 0.0
+
+        quiet_thr    = getattr(self.cfg, "atr_quiet_threshold",    0.003)
+        volatile_thr = getattr(self.cfg, "atr_volatile_threshold", 0.008)
+        tp_quiet     = getattr(self.cfg, "tp_quiet",               0.002)
+        tp_normal    = getattr(self.cfg, "tp_normal",              0.005)
+        tp_volatile  = getattr(self.cfg, "tp_volatile",            0.010)
+        sl_mult      = getattr(self.cfg, "sl_multiplier",          8.0)
+
+        if atr_pct > 0 and atr_pct < quiet_thr:
+            tp_pct = tp_quiet
+            regime = "quiet"
+        elif atr_pct >= volatile_thr:
+            tp_pct = tp_volatile
+            regime = "volatile"
         else:
-            tp = price * (1 - self.cfg.tp_pct)
-            sl = price * (1 + self.cfg.sl_pct)
+            tp_pct = tp_normal
+            regime = "normal"
+
+        sl_pct = tp_pct * sl_mult
+
+        logger.info(
+            f"{self._tag} adaptive_tp_sl | ATR%={atr_pct*100:.3f}% "
+            f"regime={regime} TP={tp_pct*100:.2f}% SL={sl_pct*100:.2f}%"
+        )
+
+        if side == "long":
+            tp = price * (1 + tp_pct)
+            sl = price * (1 - sl_pct)
+        else:
+            tp = price * (1 - tp_pct)
+            sl = price * (1 + sl_pct)
         return tp, sl
 
     def _close_position(self, price: float, reason: str) -> float:

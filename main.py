@@ -480,6 +480,14 @@ def main():
     tick_interval = int(os.environ.get("TICK_INTERVAL_SEC", 20))
     logger.info(f"Интервал тика: {tick_interval}s")
 
+    # Запускаем веб-интерфейс в отдельном потоке
+    web_port = int(os.environ.get("WEB_PORT", 8080))
+    try:
+        from web_app import start_web_server
+        start_web_server(port=web_port)
+    except Exception as e:
+        logger.warning(f"Веб-интерфейс не запустился: {e}")
+
     try:
         runner.run(interval_seconds=tick_interval)
     except KeyboardInterrupt:

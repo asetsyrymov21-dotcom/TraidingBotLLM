@@ -4,7 +4,9 @@
 #  Оркестрирует все стратегии и управление рисками
 # ============================================================
 
+import json
 import logging
+import os
 import time
 from typing import Optional, Dict
 
@@ -14,6 +16,7 @@ from market_analyzer import MarketAnalyzer, MarketSnapshot
 from strategies import TrendStrategy, EntryStrategy
 from risk_manager import RiskManager
 from telegram_notifier import TelegramNotifier
+import dynamic_settings
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +149,11 @@ class BotEngine:
             "actions": {},
         }
 
+        # ── 0. Горячая перезагрузка динамических настроек ──
+        dynamic_settings.load()
+        dynamic_settings.apply_to_config(self.config.entry_bot)
+        dynamic_settings.apply_to_config(self.config.trend_bot)
+
         # ── 1. Загрузка и анализ данных ──
         try:
             ohlcv = self.exchange.fetch_ohlcv(
@@ -235,7 +243,58 @@ class BotEngine:
             self.notifier.update_session_info(session_pnl, in_trade_amount)
 
         result["status"] = "ok"
+
+        # ── Запись статуса для веб-интерфейса ──
+        self._write_status(snapshot)
+
         return result
+
+    def _write_status(self, snapshot: MarketSnapshot):
+        """Пишет текущее состояние в data/status/<symbol>.json для веб-интерфейса."""
+        try:
+            pos = self.entry_bot.position or (
+                self.trend_bot.state.position if self.trend_bot.state.position else None
+            )
+            # Определяем режим рынка по ATR
+            atr_pct = snapshot.atr_pct or 0.0
+            quiet_thr    = getattr(self.config.entry_bot, "atr_quiet_threshold",    0.003)
+            volatile_thr = getattr(self.config.entry_bot, "atr_volatile_threshold", 0.008)
+            if atr_pct > 0 and atr_pct < quiet_thr:
+                market_regime = "quiet"
+            elif atr_pct >= volatile_thr:
+                market_regime = "volatile"
+            else:
+                market_regime = "normal"
+
+            status = {
+                "symbol":        self.profile.symbol,
+                "price":         snapshot.close,
+                "atr_pct":       round(atr_pct * 100, 4),
+                "market_regime": market_regime,
+                "rsi":           round(snapshot.rsi or 0, 1),
+                "session_pnl":   round(self.entry_bot.total_pnl + self.trend_bot.state.total_pnl, 4),
+                "win_streak":    self.entry_bot.win_streak,
+                "loss_streak":   self.entry_bot.loss_streak,
+                "trade_count":   self.entry_bot.trade_count,
+                "updated_at":    time.time(),
+                "position": None,
+            }
+            if pos:
+                status["position"] = {
+                    "side":        pos.side,
+                    "entry_price": pos.entry_price,
+                    "tp_price":    pos.tp_price,
+                    "sl_price":    pos.sl_price,
+                    "amount":      pos.amount,
+                }
+
+            os.makedirs(os.path.join("data", "status"), exist_ok=True)
+            safe_sym = self.profile.symbol.replace("/", "_")
+            path = os.path.join("data", "status", f"{safe_sym}.json")
+            with open(path, "w") as f:
+                json.dump(status, f)
+        except Exception as e:
+            logger.debug(f"[BOT:{self._log_label}] _write_status error: {e}")
 
     # ──────────────────────────────────────────
     #  Переключение режимов

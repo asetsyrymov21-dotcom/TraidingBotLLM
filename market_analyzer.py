@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MarketSnapshot:
-    """Срез рынка: цена + RSI/MACD/BB + объём"""
+    """Срез рынка: цена + RSI/MACD/BB + объём + ATR"""
     close: float
     rsi: Optional[float] = None
     macd_line: Optional[float] = None
@@ -26,6 +26,8 @@ class MarketSnapshot:
     bb_mid: Optional[float] = None
     volume: float = 0.0       # Объём последней свечи
     avg_volume: float = 0.0   # Средний объём за N свечей
+    atr: Optional[float] = None       # Average True Range (14)
+    atr_pct: Optional[float] = None   # ATR / цена (волатильность в %)
 
 
 class MarketAnalyzer:
@@ -62,6 +64,10 @@ class MarketAnalyzer:
 
         close = closes[-1]
 
+        # ATR (волатильность)
+        atr_val = self._atr(ohlcv, period=14)
+        atr_pct = (atr_val / close) if close > 0 else 0.0
+
         # Объём текущей свечи и средний объём
         current_volume = float(volumes[-1])
         vol_period = self.cfg.volume_filter_period
@@ -78,11 +84,14 @@ class MarketAnalyzer:
             bb_lower=bb_lower,
             volume=current_volume,
             avg_volume=avg_volume,
+            atr=atr_val,
+            atr_pct=atr_pct,
         )
         logger.info(
             f"{prefix}Close={close:.4f} | RSI={rsi:.1f} | "
             f"MACD={snapshot.macd_line:.6f} Sig={snapshot.macd_signal:.6f} | "
             f"BB [{bb_lower:.4f} / {bb_mid:.4f} / {bb_upper:.4f}] | "
+            f"ATR={atr_val:.4f} ({atr_pct*100:.3f}%) | "
             f"Vol={current_volume:.0f} AvgVol={avg_volume:.0f}"
         )
         return snapshot
@@ -140,6 +149,30 @@ class MarketAnalyzer:
 
         hist = macd_line - sig
         return macd_line, sig, hist
+
+    @staticmethod
+    def _atr(ohlcv: List, period: int = 14) -> float:
+        """Average True Range (Wilder's smoothing)"""
+        if len(ohlcv) < period + 1:
+            return 0.0
+        highs  = [c[2] for c in ohlcv]
+        lows   = [c[3] for c in ohlcv]
+        closes = [c[4] for c in ohlcv]
+        tr_list = []
+        for i in range(1, len(ohlcv)):
+            tr = max(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i]  - closes[i - 1]),
+            )
+            tr_list.append(tr)
+        if len(tr_list) < period:
+            return float(np.mean(tr_list)) if tr_list else 0.0
+        atr = float(np.mean(tr_list[:period]))
+        k = 1.0 / period
+        for tr in tr_list[period:]:
+            atr = tr * k + atr * (1 - k)
+        return atr
 
     @staticmethod
     def _bollinger(closes: np.ndarray, period: int = 20, std_mult: float = 2.0) -> Tuple[float, float, float]:

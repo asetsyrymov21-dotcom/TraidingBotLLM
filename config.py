@@ -38,8 +38,15 @@ class GridConfig:
 @dataclass
 class TrendBotConfig:
     """Параметры трендового бота"""
-    tp_pct: float = 0.005              # Take Profit 0.5%
-    sl_pct: float = 0.04               # Stop Loss 4%
+    tp_pct: float = 0.005              # Take Profit 0.5% (fallback если ATR недоступен)
+    sl_pct: float = 0.04               # Stop Loss 4%   (fallback если ATR недоступен)
+    # ATR-адаптивный TP/SL
+    atr_quiet_threshold: float = 0.003    # ATR% < 0.3% → тихий рынок
+    atr_volatile_threshold: float = 0.008  # ATR% > 0.8% → волатильный рынок
+    tp_quiet: float = 0.002               # TP тихий рынок (0.2%)
+    tp_normal: float = 0.005              # TP нормальный рынок (0.5%)
+    tp_volatile: float = 0.010            # TP волатильный рынок (1.0%)
+    sl_multiplier: float = 8.0            # SL = TP × sl_multiplier
     trail_pct: float = 0.006           # Trailing Stop: отступ от лучшей цены 0.6%
     trail_activate_pct: float = 0.004  # Trailing активируется при прибыли 0.4%
     max_hold_minutes: int = 240        # Макс время удержания позиции (4 часа)
@@ -68,11 +75,18 @@ class EntryBotConfig:
     macd_signal: int = 9
     bb_period: int = 20
     bb_std: float = 2.0
-    tp_pct: float = 0.005              # TP 0.5%
-    sl_pct: float = 0.04               # SL 4%
+    tp_pct: float = 0.005              # TP 0.5% (используется если ATR недоступен)
+    sl_pct: float = 0.04               # SL 4%  (используется если ATR недоступен)
     position_pct: float = 0.05         # 5% депозита на каждую пару
     emergency_squeeze_pct: float = 0.15  # Экстренное закрытие при движении -15% против позиции
     max_hold_minutes: int = 240        # Макс время удержания позиции (4 часа)
+    # ATR-адаптивный TP/SL
+    atr_quiet_threshold: float = 0.003    # ATR% < 0.3% → тихий рынок
+    atr_volatile_threshold: float = 0.008  # ATR% > 0.8% → волатильный рынок
+    tp_quiet: float = 0.002               # TP тихий рынок (0.2%)
+    tp_normal: float = 0.005              # TP нормальный рынок (0.5%)
+    tp_volatile: float = 0.010            # TP волатильный рынок (1.0%)
+    sl_multiplier: float = 8.0            # SL = TP × sl_multiplier
 
 
 @dataclass

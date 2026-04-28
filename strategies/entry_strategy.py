@@ -256,6 +256,47 @@ class EntryStrategy:
         self.position = None
         return {"action": f"close_{reason}", "pnl": pnl, "reason": reason, "side": pos.side}
 
+    def _calc_adaptive_tp_sl(self, snapshot: MarketSnapshot, direction: str):
+        """
+        Рассчитывает TP и SL с учётом ATR (волатильности рынка).
+        Тихий рынок → меньший TP/SL, волатильный → больший.
+        Возвращает (tp_price, sl_price, tp_pct, sl_pct, regime).
+        """
+        price = snapshot.close
+        atr_pct = snapshot.atr_pct or 0.0
+
+        quiet_thr    = getattr(self.cfg, "atr_quiet_threshold",    0.003)
+        volatile_thr = getattr(self.cfg, "atr_volatile_threshold", 0.008)
+        tp_quiet     = getattr(self.cfg, "tp_quiet",               0.002)
+        tp_normal    = getattr(self.cfg, "tp_normal",              0.005)
+        tp_volatile  = getattr(self.cfg, "tp_volatile",            0.010)
+        sl_mult      = getattr(self.cfg, "sl_multiplier",          8.0)
+
+        if atr_pct > 0 and atr_pct < quiet_thr:
+            regime = "quiet"
+            tp_pct = tp_quiet
+        elif atr_pct >= volatile_thr:
+            regime = "volatile"
+            tp_pct = tp_volatile
+        else:
+            regime = "normal"
+            tp_pct = tp_normal
+
+        sl_pct = tp_pct * sl_mult
+
+        if direction == "long":
+            tp = price * (1 + tp_pct)
+            sl = price * (1 - sl_pct)
+        else:
+            tp = price * (1 - tp_pct)
+            sl = price * (1 + sl_pct)
+
+        logger.info(
+            f"{self._tag} adaptive_tp_sl | ATR%={atr_pct*100:.3f}% "
+            f"regime={regime} TP={tp_pct*100:.2f}% SL={sl_pct*100:.2f}%"
+        )
+        return tp, sl, tp_pct, sl_pct, regime
+
     def _open_in_direction(self, snapshot: MarketSnapshot, direction: str, reason: str) -> Dict:
         """
         Открывает позицию в заданном направлении без проверки индикаторов.
@@ -278,12 +319,7 @@ class EntryStrategy:
                 )
             return {"action": "none", "reason": "order_failed", "pnl": 0.0}
 
-        if direction == "long":
-            tp = price * (1 + self.cfg.tp_pct)
-            sl = price * (1 - self.cfg.sl_pct)
-        else:
-            tp = price * (1 - self.cfg.tp_pct)
-            sl = price * (1 + self.cfg.sl_pct)
+        tp, sl, tp_pct, sl_pct, regime = self._calc_adaptive_tp_sl(snapshot, direction)
 
         self.position = EntryPosition(
             side=direction,
@@ -469,12 +505,7 @@ class EntryStrategy:
                 )
             return {"action": "none", "reason": "order_failed", "pnl": 0.0}
 
-        if signal.side == "long":
-            tp = price * (1 + self.cfg.tp_pct)
-            sl = price * (1 - self.cfg.sl_pct)
-        else:
-            tp = price * (1 - self.cfg.tp_pct)
-            sl = price * (1 + self.cfg.sl_pct)
+        tp, sl, tp_pct, sl_pct, regime = self._calc_adaptive_tp_sl(snapshot, signal.side)
 
         self.position = EntryPosition(
             side=signal.side,
