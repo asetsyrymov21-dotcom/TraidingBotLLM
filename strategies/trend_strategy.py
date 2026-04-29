@@ -317,7 +317,10 @@ class TrendStrategy:
         else:
             pnl = (pos.entry_price - price) * pos.amount
 
-        pnl -= pnl * self.exchange.profile.leverage * 0.001  # комиссия
+        # Комиссия биржи: ~0.04% от размера позиции при открытии + закрытии
+        # Размер позиции = amount * price, комиссия всегда вычитается (не зависит от знака pnl)
+        _commission = abs(pos.amount * price * self.exchange.profile.leverage * 0.0008)
+        pnl -= _commission  # комиссия
 
         self.state.total_pnl += pnl
         is_win = pnl > 0
