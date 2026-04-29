@@ -599,3 +599,66 @@ class TelegramNotifier:
             f"📊 Серия из 10 минусовых сделок подряд.\n"
             f"🔍 Жду новый сигнал по RSI + MACD + BB для входа."
         )
+
+    # ──────────────────────────────────────────
+    #  Изменение настроек через веб-интерфейс
+    # ──────────────────────────────────────────
+
+    def notify_settings_changed(
+        self,
+        old: dict,
+        new: dict,
+        pairs: list = None,
+        user_id: str = "",
+    ):
+        """
+        Уведомление об изменении настроек.
+        Показывает только изменившиеся параметры в формате: было → стало.
+        Если ничего не изменилось — не отправляет.
+        """
+        LABELS = {
+            "tp_pct":       ("TP",       100, "%"),
+            "sl_pct":       ("SL",       100, "%"),
+            "position_pct": ("Позиция",  100, "%"),
+        }
+
+        lines = []
+
+        if not pairs:
+            # Глобальное изменение — сравниваем top-level значения
+            for key, (label, mult, unit) in LABELS.items():
+                old_v = round(float(old.get(key, 0)) * mult, 2)
+                new_v = round(float(new.get(key, 0)) * mult, 2)
+                if abs(old_v - new_v) > 0.001:
+                    lines.append(f"  {label}: {old_v}{unit} → <b>{new_v}{unit}</b>")
+        else:
+            # Переопределение для конкретных пар
+            old_overrides = old.get("pair_overrides", {})
+            new_overrides = new.get("pair_overrides", {})
+            for sym in pairs:
+                old_sym = old_overrides.get(sym, {})
+                new_sym = new_overrides.get(sym, {})
+                sym_lines = []
+                for key, (label, mult, unit) in LABELS.items():
+                    if key == "position_pct":
+                        continue  # overrides не содержат position_pct
+                    # Если старого override не было — сравниваем с глобальным значением
+                    old_v = round(float(old_sym.get(key, old.get(key, 0))) * mult, 2)
+                    new_v = round(float(new_sym.get(key, new.get(key, 0))) * mult, 2)
+                    if abs(old_v - new_v) > 0.001:
+                        sym_lines.append(f"    {label}: {old_v}{unit} → <b>{new_v}{unit}</b>")
+                if sym_lines:
+                    lines.append(f"  📊 <b>{sym}:</b>")
+                    lines.extend(sym_lines)
+
+        if not lines:
+            return  # Реально ничего не изменилось — не шлём
+
+        pairs_str = ", ".join(pairs) if pairs else "все пары"
+        user_str  = f"\n👤 {user_id}" if user_id else ""
+
+        self._send_urgent(
+            f"⚙️ <b>Настройки обновлены</b>{user_str}\n"
+            f"📊 Применено: {pairs_str}\n\n"
+            + "\n".join(lines)
+        )

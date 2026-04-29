@@ -629,6 +629,27 @@ def _get_first_user():
     return next(iter(users.values()))
 
 
+def _notify_settings_changed(old: dict, new: dict, pairs: list):
+    """Отправляет TG-уведомление об изменении настроек (читает токен из env)."""
+    try:
+        from telegram_notifier import TelegramNotifier
+        token   = os.environ.get("TG_BOT_TOKEN", "")
+        chat_id = os.environ.get("TG_CHAT_ID", "")
+        # Запасной вариант: личный chat_id первого пользователя
+        if not chat_id:
+            user = _get_first_user()
+            if user:
+                chat_id = user.get("telegram_chat_id", "")
+        if not token or not chat_id:
+            return
+        user     = _get_first_user()
+        user_id  = user.get("user_id", "") if user else ""
+        notifier = TelegramNotifier(bot_token=token, chat_id=chat_id, enabled=True)
+        notifier.notify_settings_changed(old=old, new=new, pairs=pairs, user_id=user_id)
+    except Exception as e:
+        logger.debug(f"[WebApp] _notify_settings_changed: {e}")
+
+
 def create_app():
     try:
         from flask import Flask, jsonify, request
@@ -658,6 +679,7 @@ def create_app():
             new_vals = body.get("settings", body)
             pairs    = body.get("pairs", [])
             current  = dynamic_settings.load()
+            old      = {k: v for k, v in current.items()}  # снапшот до изменений
 
             if not pairs:
                 current["tp_pct"]       = float(new_vals.get("tp_pct",       current["tp_pct"]))
@@ -672,7 +694,16 @@ def create_app():
                     }
                 current["pair_overrides"] = overrides
 
-            return jsonify({"ok": dynamic_settings.save(current)})
+            saved = dynamic_settings.save(current)
+
+            # Telegram: уведомление об изменении настроек
+            if saved:
+                try:
+                    _notify_settings_changed(old, current, pairs)
+                except Exception as _tg_err:
+                    logger.debug(f"[WebApp] TG notify failed: {_tg_err}")
+
+            return jsonify({"ok": saved})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 400
 
