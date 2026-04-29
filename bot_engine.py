@@ -83,6 +83,7 @@ class BotEngine:
         # Состояние
         self._notify_start = notify_start  # False в мультипарном режиме
         self._current_mode: Optional[str] = None  # "trend" / "wait" / None
+        self._current_leverage: int = profile.leverage  # Отслеживаем текущее плечо
         self._last_snapshot: Optional[MarketSnapshot] = None
         self._last_risk_pnl_pct: str = "0.00%"     # Последний дневной PnL % (из тика)
         self._last_risk_drawdown_pct: str = "0.00%" # Последняя просадка % (из тика)
@@ -153,6 +154,12 @@ class BotEngine:
         dynamic_settings.load()
         dynamic_settings.apply_to_config(self.config.entry_bot, symbol=self.profile.symbol)
         dynamic_settings.apply_to_config(self.config.trend_bot, symbol=self.profile.symbol)
+
+        # Применяем плечо если изменилось
+        new_leverage = int(dynamic_settings.get("leverage", self._current_leverage))
+        if new_leverage != self._current_leverage:
+            if self.exchange.set_leverage(new_leverage):
+                self._current_leverage = new_leverage
 
         # ── 1. Загрузка и анализ данных ──
         try:

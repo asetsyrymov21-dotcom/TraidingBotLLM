@@ -18,6 +18,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "tp_pct":       0.002,   # TP 0.2%
     "sl_pct":       0.016,   # SL 1.6%
     "position_pct": 0.05,    # 5% депозита на пару
+    "leverage":     3,       # Плечо (применяется ко всем парам)
     "pair_overrides": {},    # {"BTC/USDT": {"tp_pct": 0.003, "sl_pct": 0.024}}
 }
 

@@ -113,6 +113,26 @@ class ExchangeConnector:
         logger.info(f"[{self.profile.user_id}] Skip leverage setup temporarily")
         return
 
+    def set_leverage(self, leverage: int) -> bool:
+        """Устанавливает плечо для текущего символа на бирже."""
+        try:
+            leverage = max(1, min(125, int(leverage)))
+            symbol = self.profile.symbol
+            if self.profile.exchange.lower() == "binance":
+                binance_symbol = symbol.replace("/", "")
+                self.exchange.fapiPrivatePostLeverage({
+                    "symbol": binance_symbol,
+                    "leverage": leverage,
+                })
+            else:
+                self.exchange.set_leverage(leverage, symbol)
+            self.profile.leverage = leverage
+            logger.info(f"[{self.profile.user_id}] Leverage → x{leverage} ({symbol})")
+            return True
+        except Exception as e:
+            logger.error(f"[{self.profile.user_id}] set_leverage error: {e}")
+            return False
+
     # ──────────────────────────────────────────
     #  Получение данных
     # ──────────────────────────────────────────

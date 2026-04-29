@@ -631,6 +631,11 @@ class TelegramNotifier:
                 new_v = round(float(new.get(key, 0)) * mult, 2)
                 if abs(old_v - new_v) > 0.001:
                     lines.append(f"  {label}: {old_v}{unit} → <b>{new_v}{unit}</b>")
+            # Плечо (целое число, отдельная обработка)
+            old_lev = int(old.get("leverage", 3))
+            new_lev = int(new.get("leverage", 3))
+            if old_lev != new_lev:
+                lines.append(f"  Плечо: x{old_lev} → <b>x{new_lev}</b>")
         else:
             # Переопределение для конкретных пар
             old_overrides = old.get("pair_overrides", {})

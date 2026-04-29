@@ -160,7 +160,7 @@ HTML = """<!DOCTYPE html>
 <!-- Settings -->
 <div class="section">
   <div class="section-header">
-    <span>НАСТРОЙКИ TP / SL</span>
+    <span>НАСТРОЙКИ</span>
     <div id="pair-selector" style="display:flex;gap:5px;flex-wrap:wrap"></div>
   </div>
 
@@ -195,11 +195,22 @@ HTML = """<!DOCTYPE html>
     <input type="range" id="position_pct" min="1" max="20" step="1"
       oninput="onSlider('position_pct',this.value,100)">
   </div>
+
+  <div class="setting-row">
+    <div class="setting-label">
+      <span class="setting-name">Плечо (x)</span>
+      <input type="number" class="num-input" id="num-leverage" min="1" max="20" step="1"
+        oninput="onNumInputInt('leverage',this.value,1,20)">
+    </div>
+    <input type="range" id="leverage" min="1" max="20" step="1"
+      oninput="onSliderInt('leverage',this.value)">
+    <div class="setting-hint">Применяется ко всем парам (не per-pair)</div>
+  </div>
 </div>
 
 <div style="height:16px"></div>
 <div class="save-bar">
-  <button class="btn-save" id="btn-save" onclick="saveSettings()">Сохранить настройки</button>
+  <button class="btn-save" id="btn-save" onclick="saveSettings()">Сохранить для всех пар</button>
 </div>
 
 <!-- Pair detail panel (candlestick chart) -->
@@ -236,10 +247,20 @@ async function loadSettings() {
     var d = await r.json();
     Object.assign(settings, d);
     applySettingsToUI(d);
+    updateSaveLabel();
   } catch(e) { console.error(e); }
 }
 
 function applySettingsToUI(data) {
+  // Leverage (integer — отдельно)
+  if (data.leverage !== undefined) {
+    var lev = parseInt(data.leverage);
+    var sl = document.getElementById('leverage');
+    var ni = document.getElementById('num-leverage');
+    if (sl) sl.value = lev;
+    if (ni) ni.value = lev;
+    settings['leverage'] = lev;
+  }
   [['tp_pct',100],['sl_pct',100],['position_pct',100]].forEach(function(f){
     var key=f[0], mult=f[1];
     var slider = document.getElementById(key);
@@ -268,6 +289,22 @@ function onNumInput(key, rawVal, mult, minV, maxV) {
   if (slider) slider.value = num;
 }
 
+function onSliderInt(key, rawVal) {
+  var num = parseInt(rawVal);
+  settings[key] = num;
+  var ni = document.getElementById('num-'+key);
+  if (ni) ni.value = num;
+}
+
+function onNumInputInt(key, rawVal, minV, maxV) {
+  var num = parseInt(rawVal);
+  if (isNaN(num)) return;
+  num = Math.min(Math.max(num, minV), maxV);
+  settings[key] = num;
+  var slider = document.getElementById(key);
+  if (slider) slider.value = num;
+}
+
 async function saveSettings() {
   var btn = document.getElementById('btn-save');
   btn.disabled = true; btn.textContent = 'Сохраняем...';
@@ -281,7 +318,7 @@ async function saveSettings() {
     if (res.ok) showToast('Сохранено: '+lbl, false);
     else        showToast('Ошибка', true);
   } catch(e) { showToast('Ошибка: '+e.message, true); }
-  btn.disabled = false; btn.textContent = 'Сохранить настройки';
+  btn.disabled = false; updateSaveLabel();
 }
 
 // ── Pair selector ──
@@ -291,7 +328,12 @@ function buildPairSelector(pairs) {
   var allBtn = document.createElement('button');
   allBtn.className = 'pair-btn'+(selectedPairs.length===0?' active':'');
   allBtn.textContent = 'ВСЕ';
-  allBtn.onclick = function(){ selectedPairs=[]; updatePairBtns(); };
+  allBtn.onclick = function(){
+    selectedPairs=[];
+    updatePairBtns();
+    applySettingsToUI(settings);  // Возвращаем глобальные значения в слайдеры
+    updateSaveLabel();
+  };
   c.appendChild(allBtn);
   pairs.forEach(function(sym){
     var btn = document.createElement('button');
@@ -299,9 +341,14 @@ function buildPairSelector(pairs) {
     btn.textContent = sym.replace('/USDT','');
     btn.dataset.sym = sym;
     btn.onclick = function(){
-      if (selectedPairs.includes(sym)) selectedPairs = selectedPairs.filter(function(s){return s!==sym;});
-      else selectedPairs.push(sym);
+      if (selectedPairs.includes(sym)) {
+        selectedPairs = selectedPairs.filter(function(s){return s!==sym;});
+      } else {
+        selectedPairs = [sym];  // Только одна пара за раз для clarity
+      }
       updatePairBtns();
+      loadPairOverride();  // Загружаем override-значения выбранной пары
+      updateSaveLabel();
     };
     c.appendChild(btn);
   });
@@ -311,6 +358,33 @@ function updatePairBtns() {
     if (!btn.dataset.sym) btn.className='pair-btn'+(selectedPairs.length===0?' active':'');
     else btn.className='pair-btn'+(selectedPairs.includes(btn.dataset.sym)?' active':'');
   });
+}
+
+function loadPairOverride() {
+  // Загружает override-значения выбранной пары в слайдеры
+  if (selectedPairs.length !== 1) { applySettingsToUI(settings); return; }
+  var sym = selectedPairs[0];
+  var overrides = (settings.pair_overrides || {});
+  var ov = overrides[sym];
+  // Если есть override — показываем его, иначе — глобальные значения
+  var display = {
+    tp_pct:       ov ? ov.tp_pct       : settings.tp_pct,
+    sl_pct:       ov ? ov.sl_pct       : settings.sl_pct,
+    position_pct: settings.position_pct,  // position_pct всегда глобальный
+    leverage:     settings.leverage,      // leverage всегда глобальный
+  };
+  applySettingsToUI(display);
+}
+
+function updateSaveLabel() {
+  var btn = document.getElementById('btn-save');
+  if (!btn) return;
+  if (selectedPairs.length === 0) {
+    btn.textContent = 'Сохранить для всех пар';
+  } else {
+    var names = selectedPairs.map(function(s){ return s.replace('/USDT',''); }).join(', ');
+    btn.textContent = 'Сохранить для: ' + names;
+  }
 }
 
 // ── Status / pair cards ──
@@ -685,6 +759,8 @@ def create_app():
                 current["tp_pct"]       = float(new_vals.get("tp_pct",       current["tp_pct"]))
                 current["sl_pct"]       = float(new_vals.get("sl_pct",       current["sl_pct"]))
                 current["position_pct"] = float(new_vals.get("position_pct", current["position_pct"]))
+                if "leverage" in new_vals:
+                    current["leverage"] = max(1, min(20, int(float(new_vals["leverage"]))))
             else:
                 overrides = current.get("pair_overrides", {})
                 for sym in pairs:
