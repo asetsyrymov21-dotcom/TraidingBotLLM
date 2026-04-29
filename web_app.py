@@ -847,8 +847,6 @@ def create_app():
                 current["position_pct"] = float(new_vals.get("position_pct", current["position_pct"]))
                 if "leverage" in new_vals:
                     current["leverage"] = max(1, min(20, int(float(new_vals["leverage"]))))
-                if "reversal_pause_sec" in new_vals:
-                    current["reversal_pause_sec"] = max(0, min(300, int(float(new_vals["reversal_pause_sec"]))))
                 # "ВСЕ" — сбрасываем pair_overrides, чтобы глобальные значения применились ко всем парам
                 current["pair_overrides"] = {}
             else:
@@ -859,6 +857,9 @@ def create_app():
                         "sl_pct": float(new_vals.get("sl_pct", current["sl_pct"])),
                     }
                 current["pair_overrides"] = overrides
+            # Глобальные параметры — сохраняются всегда, независимо от выбранных пар
+            if "reversal_pause_sec" in new_vals:
+                current["reversal_pause_sec"] = max(0, min(300, int(float(new_vals["reversal_pause_sec"]))))
 
             saved = dynamic_settings.save(current)
 

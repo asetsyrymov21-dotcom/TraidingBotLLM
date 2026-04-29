@@ -617,9 +617,10 @@ class TelegramNotifier:
         Если ничего не изменилось — не отправляет.
         """
         LABELS = {
-            "tp_pct":       ("TP",       100, "%"),
-            "sl_pct":       ("SL",       100, "%"),
-            "position_pct": ("Позиция",  100, "%"),
+            "tp_pct":             ("TP",              100, "%"),
+            "sl_pct":             ("SL",              100, "%"),
+            "position_pct":       ("Позиция",         100, "%"),
+            "reversal_pause_sec": ("Пауза разворота",   1, "с"),
         }
 
         lines = []
@@ -645,8 +646,8 @@ class TelegramNotifier:
                 new_sym = new_overrides.get(sym, {})
                 sym_lines = []
                 for key, (label, mult, unit) in LABELS.items():
-                    if key == "position_pct":
-                        continue  # overrides не содержат position_pct
+                    if key in ("position_pct", "reversal_pause_sec"):
+                        continue  # глобальные параметры, в pair_overrides не хранятся
                     # Если старого override не было — сравниваем с глобальным значением
                     old_v = round(float(old_sym.get(key, old.get(key, 0))) * mult, 2)
                     new_v = round(float(new_sym.get(key, new.get(key, 0))) * mult, 2)

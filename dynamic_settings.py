@@ -102,5 +102,16 @@ def apply_to_config(cfg, symbol: Optional[str] = None) -> None:
         cfg.sl_multiplier = round(sl_pct / tp_pct, 4)
 
     # Размер позиции
-    if "position_pct" in s and hasattr(cfg, "position_pct"):
-        cfg.position_pct = float(s["position_pct"])
+    if "position_pct" in s:
+        pct = float(s["position_pct"])
+        # EntryBotConfig
+        if hasattr(cfg, "position_pct"):
+            cfg.position_pct = pct
+        # TrendBotConfig использует base_position_pct
+        if hasattr(cfg, "base_position_pct"):
+            cfg.base_position_pct = pct
+            # Расширяем max_position_pct если нужно (для работы win-scaling)
+            if hasattr(cfg, "max_position_pct"):
+                cfg.max_position_pct = max(cfg.max_position_pct, pct * 3)
+            if hasattr(cfg, "min_position_pct"):
+                cfg.min_position_pct = min(cfg.min_position_pct, pct * 0.4)

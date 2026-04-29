@@ -31,6 +31,26 @@
 
 Полные описания — в `PROJECT_MAP.md`.
 
+## Правило: менять все зависимости сразу
+
+Когда добавляешь или меняешь любой параметр/фичу — **сразу** проверяй и обновляй ВСЕ места где он используется. Не по одному за раз.
+
+**Чеклист для нового параметра в настройках:**
+1. `dynamic_settings.py` — добавить в `DEFAULT_SETTINGS`
+2. `web_app.py` (HTML) — слайдер/инпут
+3. `web_app.py` (JS `applySettingsToUI`) — загрузка значения в UI
+4. `web_app.py` (POST `/api/settings`) — сохранение (глобальные параметры — вне `if not pairs`, per-pair — внутри `else`)
+5. `telegram_notifier.py` (`LABELS` в `notify_settings_changed`) — уведомление об изменении
+6. Стратегия где параметр используется (`trend_strategy.py`, `entry_strategy.py`, etc.)
+
+**Чеклист для новой логики в стратегии:**
+1. Добавить поле в dataclass состояния (`TrendBotState`, etc.)
+2. Обновить логику в `tick()` / `_close_position()` / etc.
+3. Если параметр приходит из dynamic_settings — убедиться что `apply_to_config` его передаёт (проверить имя атрибута — `position_pct` vs `base_position_pct`)
+4. Если нужно уведомление — добавить в `telegram_notifier.py`
+
+**Правило:** перед тем как писать код — пробежаться grep'ом по всем файлам где встречается похожий параметр, и сразу внести все изменения в одном PR.
+
 ## Деплой
 
 **Команда:** `.\deploy.ps1` из `C:\Users\midori\Desktop\Trading_Bot`  
