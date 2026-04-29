@@ -828,6 +828,8 @@ def create_app():
                 current["position_pct"] = float(new_vals.get("position_pct", current["position_pct"]))
                 if "leverage" in new_vals:
                     current["leverage"] = max(1, min(20, int(float(new_vals["leverage"]))))
+                # "ВСЕ" — сбрасываем pair_overrides, чтобы глобальные значения применились ко всем парам
+                current["pair_overrides"] = {}
             else:
                 overrides = current.get("pair_overrides", {})
                 for sym in pairs:
