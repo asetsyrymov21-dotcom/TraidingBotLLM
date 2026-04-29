@@ -20,6 +20,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "position_pct": 0.05,    # 5% депозита на пару
     "leverage":     3,       # Плечо (применяется ко всем парам)
     "pair_overrides": {},    # {"BTC/USDT": {"tp_pct": 0.003, "sl_pct": 0.024}}
+    "reversal_pause_sec": 0, # Пауза после разворота тренда (SL → вход в другую сторону), секунды
 }
 
 _cache: Dict[str, Any] = {}

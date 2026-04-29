@@ -53,6 +53,8 @@ class TrendBotState:
     total_pnl: float = 0.0
     trade_count: int = 0
     win_count: int = 0
+    pending_reversal_side: str = ""  # Сторона разворота после SL (ждёт паузы)
+    sl_streak: int = 0              # Подряд идущих SL-закрытий (при 3 → поиск входа)
 
 
 class TrendStrategy:
@@ -104,6 +106,13 @@ class TrendStrategy:
         # ── Управление открытой позицией ──
         if self.state.position:
             return self._manage_position(snapshot)
+
+        # ── Немедленный разворот после SL (если pending) ──
+        if self.state.pending_reversal_side:
+            side = self.state.pending_reversal_side
+            self.state.pending_reversal_side = ""
+            logger.info(f"{self._tag} REVERSAL → открываем {side.upper()} (после SL)")
+            return self._open_position(side, snapshot)
 
         # ── Поиск точки входа ──
         return self._find_entry(snapshot)
@@ -168,7 +177,38 @@ class TrendStrategy:
             ):
                 pnl = self._close_position(price, "sl")
                 result.update({"action": "close_sl", "pnl": pnl})
-                result["reverse_signal"] = "short" if pos.side == "long" else "long"
+                _rev_side = "short" if pos.side == "long" else "long"
+                result["reverse_signal"] = _rev_side
+
+                # Увеличиваем счётчик SL подряд
+                self.state.sl_streak += 1
+                logger.info(f"{self._tag} SL streak: {self.state.sl_streak}/3")
+
+                if self.state.sl_streak >= 3:
+                    # 3 SL подряд → выходим в поиск точки входа по индикаторам
+                    self.state.sl_streak = 0
+                    self.state.pending_reversal_side = ""
+                    self.state.pause_candles_left = self.cfg.delay_after_loss
+                    logger.warning(
+                        f"{self._tag} 3 SL подряд — выходим в режим поиска входа по индикаторам"
+                    )
+                    if self.notifier:
+                        self.notifier.notify_loss_streak_reset(self.user_id, symbol=self.symbol)
+                else:
+                    # < 3 SL → мгновенный разворот
+                    try:
+                        import dynamic_settings as _ds
+                        _rev_pause = int(_ds.get("reversal_pause_sec", 0))
+                        if _rev_pause > 0:
+                            self.state.paused_until = time.time() + _rev_pause
+                            logger.info(
+                                f"{self._tag} Reversal pause: {_rev_pause}s перед {_rev_side.upper()}"
+                            )
+                    except Exception:
+                        pass
+                    self.state.pending_reversal_side = _rev_side
+                    # Задержку свечей НЕ ставим — разворот должен быть мгновенным
+
                 return result
 
         return result
@@ -200,8 +240,15 @@ class TrendStrategy:
             logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
-        # ── Расчёт размера позиции ──
+        return self._open_position(side, snapshot)
+
+    def _open_position(self, side: str, snapshot: MarketSnapshot) -> Dict:
+        """Открывает позицию в указанную сторону. Вызывается из _find_entry и при развороте."""
+        result = {"action": "none", "side": None, "pnl": 0.0, "reason": ""}
+        rsi = snapshot.rsi or 50.0
         price = snapshot.close
+
+        # ── Расчёт размера позиции ──
         amount = self._calc_dynamic_size(price)
 
         if amount <= 0:
@@ -330,6 +377,7 @@ class TrendStrategy:
             self.state.win_streak += 1
             self.state.loss_streak = 0
             self.state.win_count += 1
+            self.state.sl_streak = 0   # TP сбрасывает счётчик SL подряд
             self.state.current_size_multiplier = min(
                 self.state.current_size_multiplier * self.cfg.win_scale_up,
                 3.0,
@@ -343,12 +391,19 @@ class TrendStrategy:
                 0.3,
             )
             self.state.last_result = TradeResult.LOSS
-            self.state.pause_candles_left = self.cfg.delay_after_loss
 
-            # Серия убытков → пауза
+            # SL-разворот: задержку НЕ ставим (разворот обрабатывается ниже)
+            # Для не-SL закрытий (squeeze, timeout) — обычная задержка
+            if reason not in ("sl",):
+                self.state.sl_streak = 0
+                self.state.pause_candles_left = self.cfg.delay_after_loss
+
+            # Серия убытков → длинная пауза (только если не в режиме SL-разворотов)
             if self.state.loss_streak >= self.cfg.loss_streak_pause:
                 pause_secs = 20 * 60  # 20 минут
                 self.state.paused_until = time.time() + pause_secs
+                self.state.sl_streak = 0
+                self.state.pending_reversal_side = ""
                 logger.warning(
                     f"{self._tag} Loss streak {self.state.loss_streak}! "
                     f"Pausing for {pause_secs//60} minutes."

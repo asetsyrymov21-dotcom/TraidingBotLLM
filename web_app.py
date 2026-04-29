@@ -224,6 +224,16 @@ HTML = """<!DOCTYPE html>
       oninput="onSliderInt('leverage',this.value)">
     <div class="setting-hint">Применяется ко всем парам (не per-pair)</div>
   </div>
+  <div class="setting-row">
+    <div class="setting-label">
+      <span class="setting-name">Пауза после разворота (сек)</span>
+      <input type="number" class="num-input" id="num-reversal_pause_sec" min="0" max="300" step="10"
+        oninput="onNumInputInt('reversal_pause_sec',this.value,0,300)">
+    </div>
+    <input type="range" id="reversal_pause_sec" min="0" max="300" step="10"
+      oninput="onSliderInt('reversal_pause_sec',this.value)">
+    <div class="setting-hint">0 = без паузы. Задержка перед входом в новую сторону после SL-разворота тренда</div>
+  </div>
 </div>
 
 <div style="height:16px"></div>
@@ -286,6 +296,15 @@ function applySettingsToUI(data) {
     if (ni) ni.value = lev;
     settings['leverage'] = lev;
   }
+  // reversal_pause_sec — целое, отдельная обработка
+  (function(){
+    var rp = parseInt(data.reversal_pause_sec || 0);
+    var sl2 = document.getElementById('reversal_pause_sec');
+    var ni2 = document.getElementById('num-reversal_pause_sec');
+    if (sl2) sl2.value = rp;
+    if (ni2) ni2.value = rp;
+    settings['reversal_pause_sec'] = rp;
+  })();
   [['tp_pct',100],['sl_pct',100],['position_pct',100]].forEach(function(f){
     var key=f[0], mult=f[1];
     var slider = document.getElementById(key);
@@ -828,6 +847,8 @@ def create_app():
                 current["position_pct"] = float(new_vals.get("position_pct", current["position_pct"]))
                 if "leverage" in new_vals:
                     current["leverage"] = max(1, min(20, int(float(new_vals["leverage"]))))
+                if "reversal_pause_sec" in new_vals:
+                    current["reversal_pause_sec"] = max(0, min(300, int(float(new_vals["reversal_pause_sec"]))))
                 # "ВСЕ" — сбрасываем pair_overrides, чтобы глобальные значения применились ко всем парам
                 current["pair_overrides"] = {}
             else:
