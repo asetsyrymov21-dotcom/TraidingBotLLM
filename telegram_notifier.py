@@ -657,6 +657,7 @@ class TelegramNotifier:
                     lines.extend(sym_lines)
 
         if not lines:
+            logger.debug("[TG] notify_settings_changed: diff пустой, уведомление не отправлено")
             return  # Реально ничего не изменилось — не шлём
 
         pairs_str = ", ".join(pairs) if pairs else "все пары"

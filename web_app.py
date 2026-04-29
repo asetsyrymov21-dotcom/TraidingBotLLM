@@ -783,7 +783,7 @@ def _notify_settings_changed(old: dict, new: dict, pairs: list):
             )
             return
         user     = _get_first_user()
-        user_id  = (user.get("user_id") or next(iter({}), "")) if user else ""
+        user_id  = user.get("user_id", "") if user else ""
         notifier = TelegramNotifier(bot_token=token, chat_id=chat_id, enabled=True)
         notifier.notify_settings_changed(old=old, new=new, pairs=pairs, user_id=user_id)
         logger.info(f"[WebApp] TG уведомление об изменении настроек отправлено (pairs={pairs})")
