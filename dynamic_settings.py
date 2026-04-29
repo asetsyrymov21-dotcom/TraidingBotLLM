@@ -101,5 +101,4 @@ def apply_to_config(cfg, symbol: Optional[str] = None) -> None:
         cfg.sl_multiplier = round(sl_pct / tp_pct, 4)
 
     # Размер позиции
-    if "position_pct" in s and hasattr(cfg, "position_pct"):
-        cfg.position_pct = float(s["position_pct"])
+    if "position_pct"

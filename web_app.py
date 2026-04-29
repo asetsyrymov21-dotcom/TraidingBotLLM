@@ -124,6 +124,20 @@ HTML = """<!DOCTYPE html>
   .btn-close { background:var(--border); border:none; color:var(--text);
     border-radius:6px; padding:6px 14px; font-size:14px; cursor:pointer; }
   #chart-container { flex:1; min-height:0; }
+
+  /* SOS button */
+  .btn-sos { background:rgba(248,81,73,.15); color:var(--red); border:1px solid rgba(248,81,73,.4);
+    border-radius:6px; padding:5px 12px; font-size:12px; font-weight:700;
+    cursor:pointer; letter-spacing:.5px; transition:background .15s; }
+  .btn-sos:active { background:rgba(248,81,73,.35); }
+
+  /* Timeframe bar */
+  .tf-bar { background:var(--card); border-bottom:1px solid var(--border);
+    padding:8px 12px; display:flex; gap:6px; flex-shrink:0; }
+  .tf-btn { background:var(--border); color:var(--muted); border:none;
+    border-radius:5px; padding:4px 10px; font-size:12px; font-weight:600;
+    cursor:pointer; transition:background .15s,color .15s; }
+  .tf-btn.active { background:var(--accent); color:#fff; }
   .detail-footer { background:var(--card); border-top:1px solid var(--border);
     padding:10px 16px; flex-shrink:0; display:flex; gap:16px; font-size:12px; }
   .detail-footer span { color:var(--muted); }
@@ -134,7 +148,10 @@ HTML = """<!DOCTYPE html>
 
 <div class="header">
   <div><span class="status-dot"></span><span class="header-title">Trading Bot</span></div>
-  <span class="last-update" id="last-update">--</span>
+  <div style="display:flex;align-items:center;gap:10px">
+    <button class="btn-sos" onclick="sosAction()">⚠ SOS</button>
+    <span class="last-update" id="last-update">--</span>
+  </div>
 </div>
 <div class="toast-wrap"><div class="toast-msg" id="toast"></div></div>
 
@@ -224,6 +241,13 @@ HTML = """<!DOCTYPE html>
       <span class="detail-price" id="detail-price">--</span>
       <button class="btn-close" onclick="closeDetail()">✕</button>
     </div>
+  </div>
+  <div class="tf-bar" id="tf-bar">
+    <button class="tf-btn active" data-tf="1m"  onclick="switchTf('1m')">1м</button>
+    <button class="tf-btn"        data-tf="5m"  onclick="switchTf('5m')">5м</button>
+    <button class="tf-btn"        data-tf="15m" onclick="switchTf('15m')">15м</button>
+    <button class="tf-btn"        data-tf="1h"  onclick="switchTf('1h')">1ч</button>
+    <button class="tf-btn"        data-tf="4h"  onclick="switchTf('4h')">4ч</button>
   </div>
   <div id="chart-container"></div>
   <div class="detail-footer" id="detail-footer" style="display:none">
@@ -488,9 +512,35 @@ async function loadChart(days) {
 var currentDetailSym = null;
 var chartRefreshTimer = null;
 var _lastOhlcvData = null;
+var currentTf = '1m';
+
+// ── SOS ──
+async function sosAction() {
+  if (!confirm('⚠ ПРИНУДИТЕЛЬНОЕ ЗАКРЫТИЕ ВСЕХ ПОЗИЦИЙ\\n\\nБот закроет все открытые позиции по рынку на следующем тике.\\n\\nПродолжить?')) return;
+  try {
+    var r = await fetch('/api/sos', {method:'POST'});
+    var d = await r.json();
+    if (d.ok) showToast('SOS отправлен — позиции будут закрыты', false);
+    else      showToast('Ошибка SOS: ' + (d.error||''), true);
+  } catch(e) { showToast('Ошибка: '+e.message, true); }
+}
+
+// ── Timeframe switcher ──
+function switchTf(tf) {
+  currentTf = tf;
+  document.querySelectorAll('#tf-bar .tf-btn').forEach(function(b){
+    b.classList.toggle('active', b.dataset.tf === tf);
+  });
+  if (currentDetailSym) renderDetailChart(currentDetailSym);
+}
 
 async function openDetail(sym) {
   currentDetailSym = sym;
+  currentTf = '1m';
+  // Сбрасываем TF-кнопки
+  document.querySelectorAll('#tf-bar .tf-btn').forEach(function(b){
+    b.classList.toggle('active', b.dataset.tf === '1m');
+  });
   var panel = document.getElementById('pair-detail');
   panel.classList.add('open');
   document.body.style.overflow = 'hidden';
@@ -604,7 +654,7 @@ async function renderDetailChart(sym) {
   container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:14px">Загрузка свечей...</div>';
   try {
     var safeSym = sym.replace('/','_');
-    var r = await fetch('/api/ohlcv/'+safeSym);
+    var r = await fetch('/api/ohlcv/'+safeSym+'?tf='+currentTf);
     var data = await r.json();
     if (!data.candles||!data.candles.length){
       container.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted)">Нет данных</div>';
@@ -629,7 +679,7 @@ async function renderDetailChart(sym) {
 async function refreshDetailCandles(sym) {
   try {
     var safeSym = sym.replace('/','_');
-    var r = await fetch('/api/ohlcv/'+safeSym);
+    var r = await fetch('/api/ohlcv/'+safeSym+'?tf='+currentTf);
     var data = await r.json();
     if (data.candles && data.candles.length) {
       _lastOhlcvData = data;
@@ -660,232 +710,4 @@ function refreshDetailHeader() {
 // ── Toast ──
 function showToast(msg, isError) {
   var t=document.getElementById('toast');
-  t.textContent=msg; t.className='toast-msg show'+(isError?' err':'');
-  setTimeout(function(){t.className='toast-msg';},2500);
-}
-
-// ── Init ──
-loadSettings(); loadStatus(); loadChart(7);
-setInterval(loadStatus, 10000);
-</script>
-</body>
-</html>"""
-
-
-# ──────────────────────────────────────────────────────────────
-#  Flask API
-# ──────────────────────────────────────────────────────────────
-
-def _read_status_files():
-    pairs = []
-    if not os.path.isdir(STATUS_DIR):
-        return pairs
-    for fname in sorted(os.listdir(STATUS_DIR)):
-        if not fname.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(STATUS_DIR, fname)) as f:
-                pairs.append(json.load(f))
-        except Exception:
-            pass
-    return pairs
-
-
-def _get_first_user():
-    """Читает первого пользователя из users.json."""
-    users_file = os.path.join("data", "users.json")
-    if not os.path.exists(users_file):
-        return None
-    with open(users_file, encoding="utf-8") as f:
-        users = json.load(f)
-    if not users:
-        return None
-    return next(iter(users.values()))
-
-
-def _notify_settings_changed(old: dict, new: dict, pairs: list):
-    """Отправляет TG-уведомление об изменении настроек (читает токен из env)."""
-    try:
-        from telegram_notifier import TelegramNotifier
-        token   = os.environ.get("TG_BOT_TOKEN", "")
-        chat_id = os.environ.get("TG_CHAT_ID", "")
-        # Запасной вариант: личный chat_id первого пользователя
-        if not chat_id:
-            user = _get_first_user()
-            if user:
-                chat_id = user.get("telegram_chat_id", "")
-        if not token or not chat_id:
-            return
-        user     = _get_first_user()
-        user_id  = user.get("user_id", "") if user else ""
-        notifier = TelegramNotifier(bot_token=token, chat_id=chat_id, enabled=True)
-        notifier.notify_settings_changed(old=old, new=new, pairs=pairs, user_id=user_id)
-    except Exception as e:
-        logger.debug(f"[WebApp] _notify_settings_changed: {e}")
-
-
-def create_app():
-    try:
-        from flask import Flask, jsonify, request
-    except ImportError:
-        logger.error("[WebApp] Flask не установлен.")
-        return None
-
-    app = Flask(__name__)
-    app.logger.setLevel(logging.WARNING)
-
-    @app.route("/")
-    def index():
-        return HTML
-
-    @app.route("/api/status")
-    def api_status():
-        return jsonify({"ok": True, "pairs": _read_status_files(), "ts": time.time()})
-
-    @app.route("/api/settings", methods=["GET"])
-    def api_settings_get():
-        return jsonify(dynamic_settings.load())
-
-    @app.route("/api/settings", methods=["POST"])
-    def api_settings_post():
-        try:
-            body     = request.get_json(force=True)
-            new_vals = body.get("settings", body)
-            pairs    = body.get("pairs", [])
-            current  = dynamic_settings.load()
-            old      = {k: v for k, v in current.items()}  # снапшот до изменений
-
-            if not pairs:
-                current["tp_pct"]       = float(new_vals.get("tp_pct",       current["tp_pct"]))
-                current["sl_pct"]       = float(new_vals.get("sl_pct",       current["sl_pct"]))
-                current["position_pct"] = float(new_vals.get("position_pct", current["position_pct"]))
-                if "leverage" in new_vals:
-                    current["leverage"] = max(1, min(20, int(float(new_vals["leverage"]))))
-            else:
-                overrides = current.get("pair_overrides", {})
-                for sym in pairs:
-                    overrides[sym] = {
-                        "tp_pct": float(new_vals.get("tp_pct", current["tp_pct"])),
-                        "sl_pct": float(new_vals.get("sl_pct", current["sl_pct"])),
-                    }
-                current["pair_overrides"] = overrides
-
-            saved = dynamic_settings.save(current)
-
-            # Telegram: уведомление об изменении настроек
-            if saved:
-                try:
-                    _notify_settings_changed(old, current, pairs)
-                except Exception as _tg_err:
-                    logger.debug(f"[WebApp] TG notify failed: {_tg_err}")
-
-            return jsonify({"ok": saved})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 400
-
-    @app.route("/api/ohlcv/<symbol>")
-    def api_ohlcv(symbol):
-        """symbol: BTC_USDT → BTC/USDT"""
-        sym = symbol.replace("_", "/")
-        try:
-            import ccxt
-            user = _get_first_user()
-            if not user:
-                return jsonify({"error": "no users", "candles": []})
-
-            exchange = ccxt.binance({
-                "apiKey":  user.get("api_key", ""),
-                "secret":  user.get("api_secret", ""),
-                "options": {"defaultType": "future"},
-            })
-            if user.get("is_testnet", True):
-                exchange.set_sandbox_mode(True)
-
-            ohlcv = exchange.fetch_ohlcv(sym, "1m", limit=120)
-            candles = [{"time": c[0]//1000, "open": c[1], "high": c[2], "low": c[3], "close": c[4]}
-                       for c in ohlcv]
-
-            # Читаем позицию из status-файла
-            safe_sym    = sym.replace("/", "_")
-            status_path = os.path.join("data", "status", safe_sym + ".json")
-            tp_price = sl_price = entry_price = None
-            if os.path.exists(status_path):
-                with open(status_path) as f:
-                    st = json.load(f)
-                pos = st.get("position")
-                if pos:
-                    tp_price    = pos.get("tp_price")
-                    sl_price    = pos.get("sl_price")
-                    entry_price = pos.get("entry_price")
-
-            return jsonify({
-                "candles":     candles,
-                "tp_price":    tp_price,
-                "sl_price":    sl_price,
-                "entry_price": entry_price,
-            })
-        except Exception as e:
-            logger.error(f"[OHLCV] {e}")
-            return jsonify({"error": str(e), "candles": []})
-
-    @app.route("/api/balance_chart")
-    def api_balance_chart():
-        days = int(request.args.get("days", 7))
-        try:
-            import ccxt
-            user = _get_first_user()
-            if not user:
-                return jsonify({"error": "no users", "dates": [], "values": []})
-
-            exchange = ccxt.binance({
-                "apiKey":  user.get("api_key", ""),
-                "secret":  user.get("api_secret", ""),
-                "options": {"defaultType": "future"},
-            })
-            if user.get("is_testnet", True):
-                exchange.set_sandbox_mode(True)
-
-            start_ms = int((time.time() - days * 86400) * 1000)
-            income = exchange.fapiPrivateGetIncome({
-                "incomeType": "REALIZED_PNL", "startTime": start_ms, "limit": 1000,
-            })
-
-            daily: Dict[str, float] = {}
-            for item in income:
-                day = time.strftime("%d.%m", time.gmtime(item["time"] / 1000))
-                daily[day] = daily.get(day, 0.0) + float(item["income"])
-
-            if not daily:
-                return jsonify({"dates": [], "values": [], "currency": "USDT"})
-
-            now = time.gmtime()
-            def day_key(d):
-                try: return time.mktime(time.strptime(d+"."+str(now.tm_year), "%d.%m.%Y"))
-                except: return 0
-
-            dates, values, cs = [], [], 0.0
-            for day in sorted(daily.keys(), key=day_key):
-                cs += daily[day]; dates.append(day); values.append(round(cs, 4))
-
-            return jsonify({"dates": dates, "values": values, "currency": "USDT"})
-        except Exception as e:
-            logger.error(f"[BalanceChart] {e}")
-            return jsonify({"error": str(e), "dates": [], "values": []})
-
-    return app
-
-
-def start_web_server(port: int = 8080):
-    app = create_app()
-    if app is None:
-        return
-
-    def _run():
-        try:
-            app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-        except Exception as e:
-            logger.error(f"[WebApp] Ошибка сервера: {e}")
-
-    t = threading.Thread(target=_run, daemon=True, name="WebApp")
-    t.start()
-    logger.info(f"[WebApp] Запущен на порту {port} -> http://0.0.0.0:{port}")
+  t.textContent=msg; t.className=
