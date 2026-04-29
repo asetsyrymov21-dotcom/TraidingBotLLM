@@ -147,15 +147,6 @@ class EntryStrategy:
         pos = self.position
         price = snapshot.close
 
-        # ── Таймаут: позиция висит слишком долго ──
-        max_hold = getattr(self.cfg, 'max_hold_minutes', 240) * 60
-        if time.time() - pos.open_time > max_hold:
-            hours = (time.time() - pos.open_time) / 3600
-            logger.warning(
-                f"{self._tag} TIMEOUT! Position open for {hours:.1f}h > {max_hold//60}min. Force closing."
-            )
-            return self._do_close(price, "timeout")
-
         # ── Экстренный сквиз -15% (если SL не сработал) ──
         emergency_pct = getattr(self.cfg, 'emergency_squeeze_pct', 0.15)
         if pos.side == "long":

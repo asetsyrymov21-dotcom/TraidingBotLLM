@@ -7,7 +7,7 @@
 import json
 import os
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +15,10 @@ SETTINGS_FILE = os.path.join("data", "dynamic_settings.json")
 
 # Значения по умолчанию — совпадают с config.py
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    # Общие
-    "leverage":               3,
-    "position_pct":           0.05,    # 5% депозита на пару
-    "max_hold_minutes":       240,     # 4 часа таймаут
-    "rsi_long_threshold":     50.0,
-    "rsi_short_threshold":    50.0,
+    "tp_pct":       0.002,   # TP 0.2%
+    "sl_pct":       0.016,   # SL 1.6%
+    "position_pct": 0.05,    # 5% депозита на пару
+    "pair_overrides": {},    # {"BTC/USDT": {"tp_pct": 0.003, "sl_pct": 0.024}}
 }
 
 _cache: Dict[str, Any] = {}
@@ -39,7 +37,6 @@ def load() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[DynSettings] Failed to load: {e}")
 
-    # Файл не найден или ошибка — используем дефолты и сохраняем
     _cache = dict(DEFAULT_SETTINGS)
     save(_cache)
     return _cache
@@ -68,21 +65,40 @@ def get(key: str, default: Any = None) -> Any:
     return _cache.get(key, DEFAULT_SETTINGS.get(key, default))
 
 
-def apply_to_config(cfg) -> None:
+def apply_to_config(cfg, symbol: Optional[str] = None) -> None:
     """
     Применяет динамические настройки к объекту конфига (EntryBotConfig или TrendBotConfig).
+    Если symbol задан — проверяет per-pair переопределения.
     Вызывается в начале каждого тика BotEngine.
     """
     if not _cache:
         load()
     s = _cache
 
-    # Общие
-    if "max_hold_minutes" in s and hasattr(cfg, "max_hold_minutes"):
-        cfg.max_hold_minutes = int(s["max_hold_minutes"])
+    # Базовые TP/SL
+    tp_pct = float(s.get("tp_pct", DEFAULT_SETTINGS["tp_pct"]))
+    sl_pct = float(s.get("sl_pct", DEFAULT_SETTINGS["sl_pct"]))
+
+    # Per-pair override
+    if symbol:
+        overrides = s.get("pair_overrides", {})
+        if symbol in overrides:
+            tp_pct = float(overrides[symbol].get("tp_pct", tp_pct))
+            sl_pct = float(overrides[symbol].get("sl_pct", sl_pct))
+
+    # Применяем TP — все режимы одинаковые
+    for attr in ("tp_pct", "tp_quiet", "tp_normal", "tp_volatile"):
+        if hasattr(cfg, attr):
+            setattr(cfg, attr, tp_pct)
+
+    # Применяем SL
+    if hasattr(cfg, "sl_pct"):
+        cfg.sl_pct = sl_pct
+
+    # sl_multiplier из соотношения sl/tp (чтобы _calc_adaptive_tp_sl использовал правильный SL)
+    if hasattr(cfg, "sl_multiplier") and tp_pct > 0:
+        cfg.sl_multiplier = round(sl_pct / tp_pct, 4)
+
+    # Размер позиции
     if "position_pct" in s and hasattr(cfg, "position_pct"):
         cfg.position_pct = float(s["position_pct"])
-    if "rsi_long_threshold" in s and hasattr(cfg, "rsi_long_threshold"):
-        cfg.rsi_long_threshold = float(s["rsi_long_threshold"])
-    if "rsi_short_threshold" in s and hasattr(cfg, "rsi_short_threshold"):
-        cfg.rsi_short_threshold = float(s["rsi_short_threshold"])

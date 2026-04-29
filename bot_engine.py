@@ -151,8 +151,8 @@ class BotEngine:
 
         # ── 0. Горячая перезагрузка динамических настроек ──
         dynamic_settings.load()
-        dynamic_settings.apply_to_config(self.config.entry_bot)
-        dynamic_settings.apply_to_config(self.config.trend_bot)
+        dynamic_settings.apply_to_config(self.config.entry_bot, symbol=self.profile.symbol)
+        dynamic_settings.apply_to_config(self.config.trend_bot, symbol=self.profile.symbol)
 
         # ── 1. Загрузка и анализ данных ──
         try:
@@ -266,17 +266,36 @@ class BotEngine:
             else:
                 market_regime = "normal"
 
+            # Определяем состояние бота для виджета активности
+            eb = self.entry_bot
+            if eb.position is not None:
+                bot_state = "in_position"
+                bot_state_label = "В позиции"
+            elif eb.paused_until > time.time():
+                remaining = int(eb.paused_until - time.time())
+                bot_state = "paused"
+                bot_state_label = f"Пауза {remaining}с"
+            elif eb.pause_candles_left > 0:
+                bot_state = "delay"
+                bot_state_label = "Задержка после убытка"
+            else:
+                bot_state = "searching"
+                bot_state_label = "Ищу сигнал"
+
             status = {
-                "symbol":        self.profile.symbol,
-                "price":         snapshot.close,
-                "atr_pct":       round(atr_pct * 100, 4),
-                "market_regime": market_regime,
-                "rsi":           round(snapshot.rsi or 0, 1),
-                "session_pnl":   round(self.entry_bot.total_pnl + self.trend_bot.state.total_pnl, 4),
-                "win_streak":    self.entry_bot.win_streak,
-                "loss_streak":   self.entry_bot.loss_streak,
-                "trade_count":   self.entry_bot.trade_count,
-                "updated_at":    time.time(),
+                "symbol":          self.profile.symbol,
+                "price":           snapshot.close,
+                "atr_pct":         round(atr_pct * 100, 4),
+                "market_regime":   market_regime,
+                "rsi":             round(snapshot.rsi or 0, 1),
+                "session_pnl":     round(eb.total_pnl + self.trend_bot.state.total_pnl, 4),
+                "win_streak":      eb.win_streak,
+                "loss_streak":     eb.loss_streak,
+                "trade_count":     eb.trade_count,
+                "last_result":     eb.last_result,
+                "bot_state":       bot_state,
+                "bot_state_label": bot_state_label,
+                "updated_at":      time.time(),
                 "position": None,
             }
             if pos:
