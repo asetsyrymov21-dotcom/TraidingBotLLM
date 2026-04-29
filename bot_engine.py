@@ -355,4 +355,29 @@ class BotEngine:
 
         # Telegram: экстренное закрытие
         if self.notifier:
-            self.notifier.notify_emergenc
+            self.notifier.notify_emergency_close(self.profile.user_id)
+
+    # ──────────────────────────────────────────
+    #  Статистика
+    # ──────────────────────────────────────────
+
+    def get_stats(self) -> Dict:
+        balance = self.exchange.fetch_balance()
+        return {
+            "user": self.profile.user_id,
+            "symbol": self.profile.symbol,
+            "exchange": self.profile.exchange,
+            "mode": self._current_mode,
+            "tick_count": self._tick_count,
+            "balance": balance,
+            "risk": self.risk_mgr.get_session_stats(),
+            "trend_bot": self.trend_bot.get_stats(),
+            "entry_bot": self.entry_bot.get_stats(),
+            "market": {
+                "price": self._last_snapshot.close if self._last_snapshot else 0,
+            },
+        }
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
