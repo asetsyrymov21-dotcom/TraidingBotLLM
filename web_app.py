@@ -953,12 +953,10 @@ def create_app():
             dates, values, cs = [], [], 0.0
             for day in sorted(daily.keys(), key=day_key):
                 cs += daily[day]; dates.append(day); values.append(round(cs, 4))
-
             return jsonify({"dates": dates, "values": values, "currency": "USDT"})
         except Exception as e:
             logger.error(f"[BalanceChart] {e}")
             return jsonify({"error": str(e), "dates": [], "values": []})
-
     return app
 
 
