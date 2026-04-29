@@ -22,7 +22,6 @@ HTML = """<!DOCTYPE html>
 <title>Trading Bot</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root {
     --bg:#0d1117; --card:#161b22; --border:#30363d;
@@ -359,7 +358,7 @@ function renderPairs(pairs) {
         '<span>SL: <b style="color:var(--red)">'+(pos.sl_price?pos.sl_price.toFixed(2):'--')+'</b></span>'+
       '</div>';
     var safeSym = p.symbol.replace('/','_');
-    return '<div class="pair-card" onclick="openDetail(\''+p.symbol+'\')">'+
+    return '<div class="pair-card" data-sym="'+p.symbol+'">'+
       '<div class="pair-header">'+
         '<span class="pair-name">'+p.symbol+'</span>'+
         '<span class="pair-price">$'+(p.price||0).toLocaleString('en-US',{maximumFractionDigits:2})+'</span>'+
@@ -378,6 +377,12 @@ function renderPairs(pairs) {
     '</div>';
   }).join('');
 }
+
+// ── Pair card click delegation ──
+document.addEventListener('click', function(e) {
+  var card = e.target.closest('.pair-card');
+  if (card && card.dataset.sym) openDetail(card.dataset.sym);
+});
 
 // ── PnL line chart ──
 var pnlChart = null;
@@ -405,9 +410,10 @@ async function loadChart(days) {
   } catch(e){msg.style.display='block';canvas.style.display='none';msg.textContent='Ошибка: '+e.message;}
 }
 
-// ── Candlestick detail panel ──
-var detailChart = null, detailSeries = null, currentDetailSym = null;
+// ── Candlestick detail panel (canvas-based, no external deps) ──
+var currentDetailSym = null;
 var chartRefreshTimer = null;
+var _lastOhlcvData = null;
 
 async function openDetail(sym) {
   currentDetailSym = sym;
@@ -419,7 +425,6 @@ async function openDetail(sym) {
   document.getElementById('detail-price').textContent = '--';
   document.getElementById('detail-footer').style.display = 'none';
   await renderDetailChart(sym);
-  // Обновляем свечи каждые 20 сек
   chartRefreshTimer = setInterval(function(){ refreshDetailCandles(sym); }, 20000);
 }
 
@@ -427,15 +432,102 @@ function closeDetail() {
   document.getElementById('pair-detail').classList.remove('open');
   document.body.style.overflow = '';
   currentDetailSym = null;
+  _lastOhlcvData = null;
   if (chartRefreshTimer){ clearInterval(chartRefreshTimer); chartRefreshTimer=null; }
-  if (detailChart){ detailChart.remove(); detailChart=null; detailSeries=null; }
+}
+
+function drawCandleCanvas(container, data) {
+  var candles = data.candles, tpPrice = data.tp_price,
+      slPrice = data.sl_price, entryPrice = data.entry_price;
+  container.innerHTML = '';
+  var canvas = document.createElement('canvas');
+  canvas.style.cssText = 'display:block;width:100%;height:100%';
+  container.appendChild(canvas);
+
+  var W = container.clientWidth  || 400;
+  var H = container.clientHeight || 300;
+  canvas.width  = W; canvas.height = H;
+  var ctx = canvas.getContext('2d');
+
+  var PAD = {top:20, right:72, bottom:36, left:6};
+  var cW = W - PAD.left - PAD.right;
+  var cH = H - PAD.top  - PAD.bottom;
+
+  // Price range including TP/SL/Entry
+  var prices = [];
+  candles.forEach(function(c){ prices.push(c.high, c.low); });
+  if (tpPrice)    prices.push(tpPrice);
+  if (slPrice)    prices.push(slPrice);
+  if (entryPrice) prices.push(entryPrice);
+  var minP = Math.min.apply(null,prices), maxP = Math.max.apply(null,prices);
+  var pad  = (maxP - minP) * 0.12 || minP * 0.01;
+  minP -= pad; maxP += pad;
+  var rangeP = maxP - minP;
+
+  function toY(p){ return PAD.top + cH - (p - minP) / rangeP * cH; }
+  var cand = Math.max(2, cW / candles.length);
+
+  // Background
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0,0,W,H);
+
+  // Grid
+  ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1;
+  var priceTicks = 6;
+  ctx.font = '10px sans-serif'; ctx.fillStyle = '#8b949e'; ctx.textAlign = 'left';
+  for (var i=0; i<=priceTicks; i++){
+    var pp = minP + rangeP/priceTicks*i;
+    var yy = toY(pp);
+    ctx.beginPath(); ctx.moveTo(PAD.left,yy); ctx.lineTo(W-PAD.right,yy); ctx.stroke();
+    var lbl = pp >= 1000 ? pp.toFixed(0) : pp >= 1 ? pp.toFixed(2) : pp.toFixed(5);
+    ctx.fillText(lbl, W-PAD.right+4, yy+4);
+  }
+
+  // Candles
+  candles.forEach(function(c, i){
+    var x = PAD.left + (i + 0.5) * cW / candles.length;
+    var isUp = c.close >= c.open;
+    var col  = isUp ? '#3fb950' : '#f85149';
+    ctx.strokeStyle = col; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, toY(c.high)); ctx.lineTo(x, toY(c.low)); ctx.stroke();
+    var bTop = toY(Math.max(c.open,c.close));
+    var bBot = toY(Math.min(c.open,c.close));
+    var bH   = Math.max(1, bBot - bTop);
+    var bW   = Math.max(1, cand * 0.75);
+    ctx.fillStyle = col;
+    ctx.fillRect(x - bW/2, bTop, bW, bH);
+  });
+
+  // Horizontal price lines
+  function hline(price, color, label){
+    var y = toY(price);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    ctx.setLineDash([5,3]);
+    ctx.beginPath(); ctx.moveTo(PAD.left,y); ctx.lineTo(W-PAD.right,y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'left';
+    var p2 = price >= 1000 ? price.toFixed(1) : price >= 1 ? price.toFixed(3) : price.toFixed(6);
+    ctx.fillText(label+' '+p2, W-PAD.right+4, y-2);
+  }
+  if (tpPrice)    hline(tpPrice,    '#3fb950', 'TP');
+  if (slPrice)    hline(slPrice,    '#f85149', 'SL');
+  if (entryPrice) hline(entryPrice, '#58a6ff', 'IN');
+
+  // X-axis time labels
+  var step = Math.max(1, Math.floor(candles.length/6));
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  candles.forEach(function(c, i){
+    if (i % step === 0 || i === candles.length-1){
+      var d = new Date(c.time * 1000);
+      var tl = d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+      ctx.fillText(tl, PAD.left + (i+0.5)*cW/candles.length, H-PAD.bottom+14);
+    }
+  });
 }
 
 async function renderDetailChart(sym) {
   var container = document.getElementById('chart-container');
   container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:14px">Загрузка свечей...</div>';
-  if (detailChart){ detailChart.remove(); detailChart=null; detailSeries=null; }
-
   try {
     var safeSym = sym.replace('/','_');
     var r = await fetch('/api/ohlcv/'+safeSym);
@@ -444,65 +536,31 @@ async function renderDetailChart(sym) {
       container.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted)">Нет данных</div>';
       return;
     }
-    container.innerHTML = '';
-
-    detailChart = LightweightCharts.createChart(container, {
-      layout:{ background:{color:'#0d1117'}, textColor:'#e6edf3' },
-      grid:{ vertLines:{color:'#30363d'}, horzLines:{color:'#30363d'} },
-      crosshair:{ mode:LightweightCharts.CrosshairMode.Normal },
-      rightPriceScale:{ borderColor:'#30363d' },
-      timeScale:{ borderColor:'#30363d', timeVisible:true, secondsVisible:false },
-      handleScroll:true, handleScale:true,
-    });
-
-    detailSeries = detailChart.addCandlestickSeries({
-      upColor:'#3fb950', downColor:'#f85149',
-      borderUpColor:'#3fb950', borderDownColor:'#f85149',
-      wickUpColor:'#3fb950', wickDownColor:'#f85149',
-    });
-    detailSeries.setData(data.candles);
-
-    // TP / SL / Entry lines
-    if (data.tp_price) detailSeries.createPriceLine({
-      price:data.tp_price, color:'#3fb950', lineWidth:2,
-      lineStyle:LightweightCharts.LineStyle.Dashed, axisLabelVisible:true, title:'TP',
-    });
-    if (data.sl_price) detailSeries.createPriceLine({
-      price:data.sl_price, color:'#f85149', lineWidth:2,
-      lineStyle:LightweightCharts.LineStyle.Dashed, axisLabelVisible:true, title:'SL',
-    });
-    if (data.entry_price) detailSeries.createPriceLine({
-      price:data.entry_price, color:'#58a6ff', lineWidth:1,
-      lineStyle:LightweightCharts.LineStyle.Solid, axisLabelVisible:true, title:'Вход',
-    });
-
-    detailChart.timeScale().fitContent();
+    _lastOhlcvData = data;
+    drawCandleCanvas(container, data);
 
     // Footer
     if (data.entry_price) {
       document.getElementById('detail-footer').style.display = 'flex';
       document.getElementById('df-entry').textContent = data.entry_price.toFixed(2);
-      document.getElementById('df-tp').textContent    = data.tp_price ? data.tp_price.toFixed(2) : '--';
-      document.getElementById('df-sl').textContent    = data.sl_price ? data.sl_price.toFixed(2) : '--';
+      document.getElementById('df-tp').textContent = data.tp_price ? data.tp_price.toFixed(2) : '--';
+      document.getElementById('df-sl').textContent = data.sl_price ? data.sl_price.toFixed(2) : '--';
     }
-
-    // Update header from pairsData
     refreshDetailHeader();
-
   } catch(e) {
     container.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted)">Ошибка: '+e.message+'</div>';
   }
 }
 
 async function refreshDetailCandles(sym) {
-  if (!detailSeries) return;
   try {
     var safeSym = sym.replace('/','_');
     var r = await fetch('/api/ohlcv/'+safeSym);
     var data = await r.json();
     if (data.candles && data.candles.length) {
-      // Update only last candle for smooth experience
-      detailSeries.update(data.candles[data.candles.length-1]);
+      _lastOhlcvData = data;
+      var container = document.getElementById('chart-container');
+      drawCandleCanvas(container, data);
     }
     refreshDetailHeader();
   } catch(e) {}
