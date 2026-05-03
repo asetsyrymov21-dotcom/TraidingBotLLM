@@ -99,8 +99,8 @@ class ExchangeConnector:
             )
 
             if self.profile.is_testnet:
-                exchange.set_sandbox_mode(True)
-                logger.info(f"[{self.profile.user_id}] Bybit testnet mode enabled")
+                exchange.options['demo'] = True
+                logger.info(f"[{self.profile.user_id}] Bybit Demo Trading mode enabled")
 
             exchange.load_markets()
             logger.info(f"[{self.profile.user_id}] Connected to {name.upper()}")
