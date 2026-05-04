@@ -271,6 +271,7 @@ HTML = """<!DOCTYPE html>
 
 <script>
 const settings = {};
+const _savedSettings = {};  // Всегда зеркало последнего сохранённого состояния сервера
 let selectedPairs = [];
 let activePairs   = [];
 let pairsData     = [];
@@ -281,6 +282,7 @@ async function loadSettings() {
     var r = await fetch('/api/settings');
     var d = await r.json();
     Object.assign(settings, d);
+    Object.assign(_savedSettings, d);  // Запоминаем последнее сохранённое состояние
     applySettingsToUI(d);
     updateSaveLabel();
   } catch(e) { console.error(e); }
@@ -294,16 +296,18 @@ function applySettingsToUI(data) {
     var ni = document.getElementById('num-leverage');
     if (sl) sl.value = lev;
     if (ni) ni.value = lev;
-    settings['leverage'] = lev;
+    // settings['leverage'] обновляется только через loadSettings / onSliderInt
   }
   // reversal_pause_sec — целое, отдельная обработка
   (function(){
     var rp = parseInt(data.reversal_pause_sec || 0);
     var sl2 = document.getElementById('reversal_pause_sec');
     var ni2 = document.getElementById('num-reversal_pause_sec');
-    if (sl2) sl2.value = rp;
-    if (ni2) ni2.value = rp;
-    settings['reversal_pause_sec'] = rp;
+    if (data.reversal_pause_sec !== undefined) {
+      if (sl2) sl2.value = rp;
+      if (ni2) ni2.value = rp;
+      // settings['reversal_pause_sec'] обновляется только через loadSettings / onSliderInt
+    }
   })();
   [['tp_pct',100],['sl_pct',100],['position_pct',100]].forEach(function(f){
     var key=f[0], mult=f[1];
@@ -382,7 +386,8 @@ function buildPairSelector(pairs) {
   allBtn.onclick = function(){
     selectedPairs=[];
     updatePairBtns();
-    applySettingsToUI(settings);  // Возвращаем глобальные значения в слайдеры
+    Object.assign(settings, _savedSettings);  // Восстанавливаем глобальные значения из последнего сохранения
+    applySettingsToUI(settings);
     updateSaveLabel();
   };
   c.appendChild(allBtn);
@@ -419,10 +424,11 @@ function loadPairOverride() {
   var ov = overrides[sym];
   // Если есть override — показываем его, иначе — глобальные значения
   var display = {
-    tp_pct:       ov ? ov.tp_pct       : settings.tp_pct,
-    sl_pct:       ov ? ov.sl_pct       : settings.sl_pct,
-    position_pct: settings.position_pct,  // position_pct всегда глобальный
-    leverage:     settings.leverage,      // leverage всегда глобальный
+    tp_pct:              ov ? ov.tp_pct       : settings.tp_pct,
+    sl_pct:              ov ? ov.sl_pct       : settings.sl_pct,
+    position_pct:        settings.position_pct,       // position_pct всегда глобальный
+    leverage:            settings.leverage,           // leverage всегда глобальный
+    reversal_pause_sec:  settings.reversal_pause_sec, // не сбрасывать в 0 при смене вкладки
   };
   applySettingsToUI(display);
 }
