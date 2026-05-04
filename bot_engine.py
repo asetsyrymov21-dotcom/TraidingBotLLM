@@ -155,6 +155,21 @@ class BotEngine:
         dynamic_settings.apply_to_config(self.config.entry_bot, symbol=self.profile.symbol)
         dynamic_settings.apply_to_config(self.config.trend_bot, symbol=self.profile.symbol)
 
+        # Восстанавливаем per-pair размер позиции — dynamic_settings перезаписывает
+        # глобальный position_pct, но каждый BotEngine должен использовать
+        # свой deposit_pct (= deposit_total / n_pairs), сохранённый в profile.
+        if self.profile.deposit_pct > 0:
+            self.config.entry_bot.position_pct = self.profile.deposit_pct
+            self.config.trend_bot.base_position_pct = self.profile.deposit_pct
+            # max_position_pct = 3× base (для win-scaling), min = 40% base
+            self.config.trend_bot.max_position_pct = max(
+                self.profile.deposit_pct * 3, 0.01
+            )
+            self.config.trend_bot.min_position_pct = min(
+                self.profile.deposit_pct * 0.4,
+                self.profile.deposit_pct,
+            )
+
         # ── SOS: экстренное закрытие всех позиций ──
         sos_flag = os.path.join("data", "sos.flag")
         if os.path.exists(sos_flag):
@@ -195,7 +210,10 @@ class BotEngine:
         balance = self.exchange.fetch_balance()
         if self.notifier:
             self.notifier.update_balance(balance["total"])
-        risk_report = self.risk_mgr.check_can_trade(balance["total"])
+        # Передаём реализованный PnL из стратегий — это защищает от ложной
+        # блокировки когда маржа под открытую позицию снижает balance["total"].
+        session_pnl = self.entry_bot.total_pnl + self.trend_bot.state.total_pnl
+        risk_report = self.risk_mgr.check_can_trade(balance["total"], session_pnl=session_pnl)
         self._last_risk_pnl_pct = f"{risk_report.daily_pnl_pct*100:.2f}%"
         self._last_risk_drawdown_pct = f"{risk_report.drawdown_pct*100:.2f}%"
         result["risk"] = {

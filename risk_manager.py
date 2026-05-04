@@ -65,22 +65,28 @@ class RiskManager:
             self.daily_stats.starting_balance = balance
             self.daily_stats.current_balance  = balance
 
-    def check_can_trade(self, current_balance: float) -> RiskReport:
+    def check_can_trade(self, current_balance: float, session_pnl: float = 0.0) -> RiskReport:
         """
         Проверяет, можно ли открывать новые позиции.
         Возвращает RiskReport с флагом can_trade.
+
+        session_pnl — реализованный PnL из стратегий (entry_bot + trend_bot).
+        Используется вместо balance delta, чтобы залог маржи под открытые
+        позиции не воспринимался как торговый убыток.
         """
         self._refresh_daily(current_balance)
 
-        # Обновляем пиковый баланс
-        if current_balance > self.peak_balance:
-            self.peak_balance = current_balance
-
-        # ── Расчёт метрик ──
-        daily_pnl = current_balance - self.daily_stats.starting_balance
+        # ── Расчёт метрик на основе реализованного PnL ──
+        # (не зависит от того, сколько маржи заморожено в открытых позициях)
+        daily_pnl = session_pnl
         daily_pnl_pct = daily_pnl / max(self.daily_stats.starting_balance, 1)
 
-        drawdown = self.peak_balance - current_balance
+        # Drawdown считаем от пика реализованного баланса
+        realized_balance = self.daily_stats.starting_balance + session_pnl
+        if realized_balance > self.peak_balance:
+            self.peak_balance = realized_balance
+
+        drawdown = self.peak_balance - realized_balance
         drawdown_pct = drawdown / max(self.peak_balance, 1)
 
         # ── Проверка лимитов ──
