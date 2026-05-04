@@ -91,21 +91,30 @@ class SymbolScanner:
         except ImportError:
             raise RuntimeError("ccxt не установлен: pip install ccxt")
 
-        params = {
-            "apiKey": self.api_key,
-            "secret": self.api_secret,
-            "enableRateLimit": True,
-            "options": {"defaultType": "future"},
-        }
-
         if self.exchange_name == "binance":
+            params = {
+                "apiKey": self.api_key,
+                "secret": self.api_secret,
+                "enableRateLimit": True,
+                "options": {"defaultType": "future"},
+            }
             ex = ccxt.binance(params)
             if self.is_testnet:
                 ex.set_sandbox_mode(True)
         elif self.exchange_name == "bybit":
+            params = {
+                "apiKey": self.api_key,
+                "secret": self.api_secret,
+                "enableRateLimit": True,
+                "options": {
+                    "defaultType": "linear",   # Bybit использует "linear", не "future"
+                },
+            }
             ex = ccxt.bybit(params)
             if self.is_testnet:
-                ex.set_sandbox_mode(True)
+                # Bybit Demo Trading — НЕ sandbox/testnet, отдельный endpoint
+                ex.options["demo"] = True
+                logger.info("[SymbolScanner] Bybit Demo Trading mode enabled")
         else:
             raise ValueError(f"Неподдерживаемая биржа: {self.exchange_name}")
 
@@ -140,8 +149,18 @@ class SymbolScanner:
             top = [sym for sym, _ in candidates[: self.top_n]]
 
             if not top:
-                logger.warning("[SymbolScanner] Не удалось получить ни одной пары!")
-                return  # Оставляем старый кэш
+                logger.warning(
+                    "[SymbolScanner] Не удалось получить ни одной пары — "
+                    "возможно биржа вернула символы в неожиданном формате."
+                )
+                if not self._cached_symbols:
+                    self._cached_symbols = ["BTC/USDT", "ETH/USDT", "BNB/USDT"]
+                    logger.warning(
+                        f"[SymbolScanner] Используем резервный список: {self._cached_symbols}"
+                    )
+                # Обновляем timestamp чтобы не долбить биржу каждый тик
+                self._last_refresh = time.time()
+                return
 
             self._cached_symbols = top
             self._last_refresh = time.time()

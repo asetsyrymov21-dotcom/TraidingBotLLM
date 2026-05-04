@@ -99,8 +99,13 @@ class ExchangeConnector:
             )
 
             if self.profile.is_testnet:
-                exchange.options['demo'] = True
-                logger.info(f"[{self.profile.user_id}] Bybit Demo Trading mode enabled")
+                # Bybit Demo Trading использует отдельный endpoint.
+                # options['demo'] = True не работает в ccxt 4.5.x — шаблон {hostname} не раскрывается.
+                # Также fetch_currencies() не поддерживается в demo → отключаем.
+                exchange.urls["api"]["public"] = "https://api-demo.bybit.com"
+                exchange.urls["api"]["private"] = "https://api-demo.bybit.com"
+                exchange.has["fetchCurrencies"] = False
+                logger.info(f"[{self.profile.user_id}] Bybit Demo Trading mode enabled (api-demo.bybit.com)")
 
             exchange.load_markets()
             logger.info(f"[{self.profile.user_id}] Connected to {name.upper()}")
