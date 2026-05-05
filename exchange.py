@@ -83,6 +83,7 @@ class ExchangeConnector:
             public_exchange.load_markets()
             logger.info(f"[{self.profile.user_id}] Public markets loaded")
             logger.info(f"[{self.profile.user_id}] Connected to {name.upper()}")
+            self._bybit_hedge_mode = False  # Не Bybit
             return private_exchange, public_exchange
 
         elif name == "bybit":
@@ -109,6 +110,39 @@ class ExchangeConnector:
 
             exchange.load_markets()
             logger.info(f"[{self.profile.user_id}] Connected to {name.upper()}")
+
+            # Определяем и переключаем position mode на One-Way (0).
+            # В Hedge Mode (3) SELL без positionIdx возвращает retCode:170131.
+            # Если позиции уже открыты — переключение не сработает, но
+            # place_market_order всё равно добавит нужный positionIdx.
+            self._bybit_hedge_mode = False
+            try:
+                resp = exchange.privateGetV5PositionSwitchPositionMode({
+                    "category": "linear", "coin": "USDT"
+                })
+                mode = int((resp.get("result") or {}).get("mode", 0))
+                if mode == 3:  # BothSide (Hedge)
+                    # Пытаемся переключить в One-Way
+                    try:
+                        exchange.privatePostV5PositionSwitchPositionMode({
+                            "category": "linear", "coin": "USDT", "mode": 0
+                        })
+                        logger.info(f"[{self.profile.user_id}] Bybit: switched to One-Way mode")
+                        self._bybit_hedge_mode = False
+                    except Exception as sw_err:
+                        # Переключение не удалось (открытые позиции?) — остаёмся в Hedge
+                        logger.warning(
+                            f"[{self.profile.user_id}] Bybit: cannot switch to One-Way "
+                            f"(staying in Hedge mode, will use positionIdx): {sw_err}"
+                        )
+                        self._bybit_hedge_mode = True
+                else:
+                    logger.info(f"[{self.profile.user_id}] Bybit: One-Way mode confirmed")
+            except Exception as e:
+                logger.warning(f"[{self.profile.user_id}] Bybit: could not detect position mode: {e}")
+                # На всякий случай используем positionIdx (безопасный дефолт)
+                self._bybit_hedge_mode = True
+
             return exchange, exchange
 
         else:
@@ -185,10 +219,32 @@ class ExchangeConnector:
 
         balance = self.exchange.fetch_balance()
         usdt = balance.get("USDT", {})
+
+        # Bybit Unified Account возвращает total = equity (walletBalance + unrealizedPnL).
+        # Это вызывает скачки баланса при открытых позициях.
+        # Вытаскиваем стабильный walletBalance из raw-ответа.
+        wallet_balance: float = 0.0
+        try:
+            info = balance.get("info", {})
+            for account in (info.get("result") or {}).get("list", []):
+                for coin_data in account.get("coin", []):
+                    if coin_data.get("coin") == "USDT":
+                        wb = coin_data.get("walletBalance")
+                        if wb:
+                            wallet_balance = float(wb)
+                        break
+                if wallet_balance:
+                    break
+        except Exception:
+            pass
+
+        total = wallet_balance if wallet_balance > 0 else float(usdt.get("total", 0))
+        free_val = float(usdt.get("free", 0))
+
         return {
-            "total": float(usdt.get("total", 0)),
-            "free": float(usdt.get("free", 0)),
-            "used": float(usdt.get("used", 0)),
+            "total": total,       # walletBalance — стабильный (без нереализованного PnL)
+            "free": free_val,     # availableBalance — для расчёта размера позиции
+            "used": max(0.0, total - free_val),
         }
 
     def fetch_positions(self) -> List[Dict]:
@@ -282,8 +338,20 @@ class ExchangeConnector:
             params = {}
             if reduce_only:
                 params["reduceOnly"] = True
-                if self.profile.exchange.lower() == "bybit":
-                    params["reduce_only"] = True
+
+            if self.profile.exchange.lower() == "bybit":
+                hedge = getattr(self, "_bybit_hedge_mode", False)
+                if hedge:
+                    # Hedge Mode: нужно явно указывать positionIdx
+                    # open long (buy)  → 1, open short (sell) → 2
+                    # close long (sell reduce) → 1, close short (buy reduce) → 2
+                    if not reduce_only:
+                        params["positionIdx"] = 1 if side == "buy" else 2
+                    else:
+                        params["positionIdx"] = 1 if side == "sell" else 2
+                else:
+                    # One-Way Mode: positionIdx=0 (или не передаём — работает без него)
+                    params["positionIdx"] = 0
 
             order = self.exchange.create_order(
                 symbol=self.profile.symbol,
