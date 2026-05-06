@@ -183,6 +183,13 @@ class BotEngine:
             self._write_status(self._last_snapshot) if self._last_snapshot else None
             return result
 
+        # ── PAUSE: бот остановлен через веб-интерфейс ──
+        pause_flag = os.path.join("data", "bot_pause.flag")
+        if os.path.exists(pause_flag):
+            logger.info(f"[BOT:{self._log_label}] PAUSED — флаг bot_pause.flag активен, тик пропущен")
+            result["status"] = "paused"
+            return result
+
         # Применяем плечо если изменилось
         new_leverage = int(dynamic_settings.get("leverage", self._current_leverage))
         if new_leverage != self._current_leverage:

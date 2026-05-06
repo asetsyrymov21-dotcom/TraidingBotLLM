@@ -432,6 +432,12 @@ def main():
         enabled=config.telegram.enabled,
     )
 
+    # Глобальный перехват всех logger.error() — шлём короткое уведомление в TG
+    if tg_enabled:
+        from telegram_notifier import TelegramErrorHandler
+        tg_err_handler = TelegramErrorHandler(notifier)
+        logging.getLogger().addHandler(tg_err_handler)
+
     if tg_enabled:
         logger.info("Telegram уведомления ВКЛЮЧЕНЫ")
     else:

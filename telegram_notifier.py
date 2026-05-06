@@ -10,6 +10,7 @@ import time
 from typing import Optional
 from urllib.request import urlopen, Request
 from urllib.parse import quote_plus
+import traceback
 from urllib.error import URLError
 
 # SSL-контекст без верификации (нужно на Windows с корпоративным прокси/антивирусом)
@@ -669,3 +670,76 @@ class TelegramNotifier:
             f"📊 Применено: {pairs_str}\n\n"
             + "\n".join(lines)
         )
+
+
+# ──────────────────────────────────────────────────────────────
+#  TelegramErrorHandler — logging.Handler для автоматических
+#  уведомлений об ошибках во всём коде
+# ──────────────────────────────────────────────────────────────
+
+class TelegramErrorHandler(logging.Handler):
+    """
+    Подключается к корневому логгеру один раз.
+    Любой logger.error() / logger.critical() во всём проекте
+    автоматически отправит короткое сообщение в Telegram.
+
+    Антиспам: одна и та же ошибка (по первым 120 символам) не будет
+    отправлена повторно в течение COOLDOWN_SEC секунд.
+    """
+
+    COOLDOWN_SEC = 60  # сколько секунд молчать после одинаковой ошибки
+
+    def __init__(self, notifier: "TelegramNotifier"):
+        super().__init__(level=logging.ERROR)
+        self.notifier = notifier
+        self._last_sent: dict = {}   # key → timestamp последней отправки
+        self._lock = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            # Собираем короткое описание ошибки
+            msg_text = record.getMessage()
+            short_key = msg_text[:120]
+
+            # Антиспам
+            now = time.time()
+            with self._lock:
+                last = self._last_sent.get(short_key, 0)
+                if now - last < self.COOLDOWN_SEC:
+                    return
+                self._last_sent[short_key] = now
+                # Чистим старые записи чтобы словарь не рос бесконечно
+                if len(self._last_sent) > 200:
+                    cutoff = now - self.COOLDOWN_SEC * 10
+                    self._last_sent = {k: v for k, v in self._last_sent.items() if v > cutoff}
+
+            # Место возникновения из LogRecord (всегда точное — stdlib заполняет сам)
+            fname = record.filename          # только имя файла, без пути
+            lineno = record.lineno
+            func   = record.funcName
+
+            # Если есть exc_info — берём последний фрейм трейсбека для точного места
+            if record.exc_info and record.exc_info[2]:
+                frames = traceback.extract_tb(record.exc_info[2])
+                if frames:
+                    last_frame = frames[-1]
+                    fname  = last_frame.filename.replace("\\", "/").split("/")[-1]
+                    lineno = last_frame.lineno
+                    func   = last_frame.name
+
+            location = f"📍 <code>{fname}:{lineno}</code> → <code>{func}()</code>"
+
+            # Тип исключения (если есть)
+            exc_type = ""
+            if record.exc_info and record.exc_info[0]:
+                exc_type = f"\n⚠️ <code>{record.exc_info[0].__name__}</code>"
+
+            tg_msg = (
+                f"❌ <b>Ошибка [{record.name.split('.')[-1]}]</b>\n"
+                f"{location}{exc_type}\n"
+                f"💬 {msg_text[:300]}"
+            )
+            self.notifier.send(tg_msg)
+        except Exception:
+            pass  # handler никогда не должен падать сам
+

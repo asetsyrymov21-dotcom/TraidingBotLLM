@@ -132,6 +132,17 @@ HTML = """<!DOCTYPE html>
     cursor:pointer; letter-spacing:.5px; transition:background .15s; }
   .btn-sos:active { background:rgba(248,81,73,.35); }
 
+  /* Start/Stop bot buttons */
+  .btn-bot-stop  { background:rgba(248,81,73,.18); color:var(--red);   border:1px solid rgba(248,81,73,.5);
+    border-radius:6px; padding:5px 13px; font-size:12px; font-weight:700;
+    cursor:pointer; transition:background .15s; }
+  .btn-bot-stop:active  { background:rgba(248,81,73,.4); }
+  .btn-bot-start { background:rgba(63,185,80,.15); color:var(--green); border:1px solid rgba(63,185,80,.45);
+    border-radius:6px; padding:5px 13px; font-size:12px; font-weight:700;
+    cursor:pointer; transition:background .15s; }
+  .btn-bot-start:active { background:rgba(63,185,80,.35); }
+  .btn-bot-stop[disabled], .btn-bot-start[disabled] { opacity:.45; cursor:default; }
+
   /* Timeframe bar */
   .tf-bar { background:var(--card); border-bottom:1px solid var(--border);
     padding:8px 12px; display:flex; gap:6px; flex-shrink:0; }
@@ -148,8 +159,10 @@ HTML = """<!DOCTYPE html>
 <body>
 
 <div class="header">
-  <div><span class="status-dot"></span><span class="header-title">Trading Bot</span></div>
-  <div style="display:flex;align-items:center;gap:10px">
+  <div><span class="status-dot" id="status-dot"></span><span class="header-title">Trading Bot</span></div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <button class="btn-bot-stop"  id="btn-bot-stop"  onclick="botControl('stop')"  title="Остановить бота">⏹ Стоп</button>
+    <button class="btn-bot-start" id="btn-bot-start" onclick="botControl('start')" title="Запустить бота" style="display:none">▶ Старт</button>
     <button class="btn-sos" onclick="sosAction()">⚠ SOS</button>
     <span class="last-update" id="last-update">--</span>
   </div>
@@ -547,6 +560,52 @@ var chartRefreshTimer = null;
 var _lastOhlcvData = null;
 var currentTf = '1m';
 
+// ── Bot Start / Stop ──
+var _botPaused = false;
+
+async function botControl(action) {
+  var stopBtn  = document.getElementById('btn-bot-stop');
+  var startBtn = document.getElementById('btn-bot-start');
+  var dot      = document.getElementById('status-dot');
+  stopBtn.disabled = true; startBtn.disabled = true;
+  try {
+    var r = await fetch('/api/bot/' + action, {method:'POST'});
+    var d = await r.json();
+    if (d.ok) {
+      _botPaused = (action === 'stop');
+      applyBotState(_botPaused);
+      showToast(_botPaused ? 'Бот остановлен' : 'Бот запущен', false);
+    } else {
+      showToast('Ошибка: ' + (d.error||''), true);
+    }
+  } catch(e) { showToast('Ошибка: '+e.message, true); }
+  stopBtn.disabled = false; startBtn.disabled = false;
+}
+
+function applyBotState(paused) {
+  var stopBtn  = document.getElementById('btn-bot-stop');
+  var startBtn = document.getElementById('btn-bot-start');
+  var dot      = document.getElementById('status-dot');
+  if (paused) {
+    stopBtn.style.display  = 'none';
+    startBtn.style.display = '';
+    if (dot) { dot.style.background = 'var(--yellow)'; dot.style.animationDuration = '1s'; }
+  } else {
+    stopBtn.style.display  = '';
+    startBtn.style.display = 'none';
+    if (dot) { dot.style.background = 'var(--green)'; dot.style.animationDuration = '2s'; }
+  }
+}
+
+async function fetchBotState() {
+  try {
+    var r = await fetch('/api/bot/state');
+    var d = await r.json();
+    _botPaused = d.paused === true;
+    applyBotState(_botPaused);
+  } catch(e) {}
+}
+
 // ── SOS ──
 async function sosAction() {
   if (!confirm('⚠ ПРИНУДИТЕЛЬНОЕ ЗАКРЫТИЕ ВСЕХ ПОЗИЦИЙ\\n\\nБот закроет все открытые позиции по рынку на следующем тике.\\n\\nПродолжить?')) return;
@@ -748,8 +807,9 @@ function showToast(msg, isError) {
 }
 
 // ── Init ──
-loadSettings(); loadStatus(); loadChart(7);
+loadSettings(); loadStatus(); loadChart(7); fetchBotState();
 setInterval(loadStatus, 10000);
+setInterval(fetchBotState, 15000);
 </script>
 </body>
 </html>"""
@@ -879,6 +939,39 @@ def create_app():
             return jsonify({"ok": saved})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 400
+
+    @app.route("/api/bot/state")
+    def api_bot_state():
+        """Возвращает текущее состояние (запущен / остановлен)."""
+        flag_path = os.path.join("data", "bot_pause.flag")
+        return jsonify({"ok": True, "paused": os.path.exists(flag_path)})
+
+    @app.route("/api/bot/stop", methods=["POST"])
+    def api_bot_stop():
+        """Создаёт data/bot_pause.flag — бот будет пропускать тики."""
+        try:
+            os.makedirs("data", exist_ok=True)
+            flag_path = os.path.join("data", "bot_pause.flag")
+            with open(flag_path, "w") as f:
+                f.write(str(time.time()))
+            logger.info("[WebApp] Bot STOP flag создан")
+            return jsonify({"ok": True})
+        except Exception as e:
+            logger.error(f"[WebApp] bot/stop error: {e}")
+            return jsonify({"ok": False, "error": str(e)}), 500
+
+    @app.route("/api/bot/start", methods=["POST"])
+    def api_bot_start():
+        """Удаляет data/bot_pause.flag — бот возобновляет работу."""
+        try:
+            flag_path = os.path.join("data", "bot_pause.flag")
+            if os.path.exists(flag_path):
+                os.remove(flag_path)
+            logger.info("[WebApp] Bot START — флаг паузы удалён")
+            return jsonify({"ok": True})
+        except Exception as e:
+            logger.error(f"[WebApp] bot/start error: {e}")
+            return jsonify({"ok": False, "error": str(e)}), 500
 
     @app.route("/api/sos", methods=["POST"])
     def api_sos():
