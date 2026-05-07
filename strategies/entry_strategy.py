@@ -303,6 +303,9 @@ class EntryStrategy:
         order = self.exchange.place_market_order(direction, amount)
         if not order:
             logger.warning(f"{self._tag} skip open | reason=order_failed ({reason})")
+            # Сбрасываем last_result — иначе следующий тик снова попытается открыть тот же ордер
+            self.last_result = "NONE"
+            self.last_side = ""
             if self.notifier:
                 self.notifier.notify_order_failed(
                     self.user_id, "WIN/LOSS", direction, price,
@@ -489,6 +492,9 @@ class EntryStrategy:
         order = self.exchange.place_market_order(signal.side, amount)
         if not order:
             logger.warning(f"{self._tag} skip open | reason=order_failed")
+            # Сбрасываем last_result — иначе следующий тик снова попытается открыть тот же ордер
+            self.last_result = "NONE"
+            self.last_side = ""
             if self.notifier:
                 self.notifier.notify_order_failed(
                     self.user_id, "УМНЫЙ ВХОД", signal.side, price,
