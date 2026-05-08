@@ -77,16 +77,20 @@ def apply_to_config(cfg, symbol: Optional[str] = None) -> None:
         load()
     s = _cache
 
-    # Базовые TP/SL
+    # Глобальные дефолты
     tp_pct = float(s.get("tp_pct", DEFAULT_SETTINGS["tp_pct"]))
     sl_pct = float(s.get("sl_pct", DEFAULT_SETTINGS["sl_pct"]))
+    pct    = float(s.get("position_pct", DEFAULT_SETTINGS["position_pct"]))
 
-    # Per-pair override
+    # Per-pair override — переопределяет tp, sl, position_pct индивидуально
     if symbol:
         overrides = s.get("pair_overrides", {})
         if symbol in overrides:
-            tp_pct = float(overrides[symbol].get("tp_pct", tp_pct))
-            sl_pct = float(overrides[symbol].get("sl_pct", sl_pct))
+            ov = overrides[symbol]
+            tp_pct = float(ov.get("tp_pct", tp_pct))
+            sl_pct = float(ov.get("sl_pct", sl_pct))
+            if "position_pct" in ov:
+                pct = float(ov["position_pct"])
 
     # Применяем TP — все режимы одинаковые
     for attr in ("tp_pct", "tp_quiet", "tp_normal", "tp_volatile"):
@@ -101,17 +105,14 @@ def apply_to_config(cfg, symbol: Optional[str] = None) -> None:
     if hasattr(cfg, "sl_multiplier") and tp_pct > 0:
         cfg.sl_multiplier = round(sl_pct / tp_pct, 4)
 
-    # Размер позиции
-    if "position_pct" in s:
-        pct = float(s["position_pct"])
-        # EntryBotConfig
-        if hasattr(cfg, "position_pct"):
-            cfg.position_pct = pct
-        # TrendBotConfig использует base_position_pct
-        if hasattr(cfg, "base_position_pct"):
-            cfg.base_position_pct = pct
-            # Расширяем max_position_pct если нужно (для работы win-scaling)
-            if hasattr(cfg, "max_position_pct"):
-                cfg.max_position_pct = max(cfg.max_position_pct, pct * 3)
-            if hasattr(cfg, "min_position_pct"):
-                cfg.min_position_pct = min(cfg.min_position_pct, pct * 0.4)
+    # Размер позиции (уже с учётом per-pair override)
+    if hasattr(cfg, "position_pct"):
+        cfg.position_pct = pct
+    # TrendBotConfig использует base_position_pct
+    if hasattr(cfg, "base_position_pct"):
+        cfg.base_position_pct = pct
+        # Расширяем max_position_pct если нужно (для работы win-scaling)
+        if hasattr(cfg, "max_position_pct"):
+            cfg.max_position_pct = max(cfg.max_position_pct, pct * 3)
+        if hasattr(cfg, "min_position_pct"):
+            cfg.min_position_pct = min(cfg.min_position_pct, pct * 0.4)

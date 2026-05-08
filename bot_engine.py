@@ -190,8 +190,10 @@ class BotEngine:
             result["status"] = "paused"
             return result
 
-        # Применяем плечо если изменилось
-        new_leverage = int(dynamic_settings.get("leverage", self._current_leverage))
+        # Применяем плечо если изменилось (per-pair override имеет приоритет над глобальным)
+        _pair_overrides = dynamic_settings.get("pair_overrides") or {}
+        _pair_ov = _pair_overrides.get(self.profile.symbol, {})
+        new_leverage = int(_pair_ov.get("leverage", dynamic_settings.get("leverage", self._current_leverage)))
         if new_leverage != self._current_leverage:
             self.exchange.set_leverage(new_leverage)
             # Обновляем в любом случае — иначе при ошибке бот спамит попытками каждый тик

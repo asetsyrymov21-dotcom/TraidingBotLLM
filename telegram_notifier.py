@@ -647,13 +647,18 @@ class TelegramNotifier:
                 new_sym = new_overrides.get(sym, {})
                 sym_lines = []
                 for key, (label, mult, unit) in LABELS.items():
-                    if key in ("position_pct", "reversal_pause_sec"):
-                        continue  # глобальные параметры, в pair_overrides не хранятся
-                    # Если старого override не было — сравниваем с глобальным значением
+                    if key == "reversal_pause_sec":
+                        continue  # всегда глобальный
+                    # Если старого override не было — сравниваем с глобальным дефолтом
                     old_v = round(float(old_sym.get(key, old.get(key, 0))) * mult, 2)
                     new_v = round(float(new_sym.get(key, new.get(key, 0))) * mult, 2)
                     if abs(old_v - new_v) > 0.001:
                         sym_lines.append(f"    {label}: {old_v}{unit} → <b>{new_v}{unit}</b>")
+                # Плечо (целое число, отдельная обработка)
+                old_lev = int(old_sym.get("leverage", old.get("leverage", 3)))
+                new_lev = int(new_sym.get("leverage", new.get("leverage", 3)))
+                if old_lev != new_lev:
+                    sym_lines.append(f"    Плечо: x{old_lev} → <b>x{new_lev}</b>")
                 if sym_lines:
                     lines.append(f"  📊 <b>{sym}:</b>")
                     lines.extend(sym_lines)

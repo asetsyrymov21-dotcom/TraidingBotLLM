@@ -235,7 +235,7 @@ HTML = """<!DOCTYPE html>
     </div>
     <input type="range" id="leverage" min="1" max="20" step="1"
       oninput="onSliderInt('leverage',this.value)">
-    <div class="setting-hint">Применяется ко всем парам (не per-pair)</div>
+    <div class="setting-hint">Индивидуально для каждой пары</div>
   </div>
   <div class="setting-row">
     <div class="setting-label">
@@ -437,11 +437,11 @@ function loadPairOverride() {
   var ov = overrides[sym];
   // Если есть override — показываем его, иначе — глобальные значения
   var display = {
-    tp_pct:              ov ? ov.tp_pct       : settings.tp_pct,
-    sl_pct:              ov ? ov.sl_pct       : settings.sl_pct,
-    position_pct:        settings.position_pct,       // position_pct всегда глобальный
-    leverage:            settings.leverage,           // leverage всегда глобальный
-    reversal_pause_sec:  settings.reversal_pause_sec, // не сбрасывать в 0 при смене вкладки
+    tp_pct:             (ov && ov.tp_pct       !== undefined) ? ov.tp_pct       : settings.tp_pct,
+    sl_pct:             (ov && ov.sl_pct       !== undefined) ? ov.sl_pct       : settings.sl_pct,
+    position_pct:       (ov && ov.position_pct !== undefined) ? ov.position_pct : settings.position_pct,
+    leverage:           (ov && ov.leverage     !== undefined) ? ov.leverage     : settings.leverage,
+    reversal_pause_sec: settings.reversal_pause_sec, // всегда глобальный
   };
   applySettingsToUI(display);
 }
@@ -908,23 +908,26 @@ def create_app():
             old      = copy.deepcopy(current)  # глубокая копия — иначе pair_overrides мутируется in-place
 
             if not pairs:
-                current["tp_pct"] = float(new_vals.get("tp_pct", current["tp_pct"]))
-                current["sl_pct"] = float(new_vals.get("sl_pct", current["sl_pct"]))
-                # "ВСЕ" — сбрасываем pair_overrides, чтобы глобальные значения применились ко всем парам
+                # "ВСЕ" — обновляем глобальные дефолты и сбрасываем все per-pair overrides
+                current["tp_pct"]       = float(new_vals.get("tp_pct",       current["tp_pct"]))
+                current["sl_pct"]       = float(new_vals.get("sl_pct",       current["sl_pct"]))
+                current["position_pct"] = float(new_vals.get("position_pct", current["position_pct"]))
+                if "leverage" in new_vals:
+                    current["leverage"] = max(1, min(20, int(float(new_vals["leverage"]))))
                 current["pair_overrides"] = {}
             else:
+                # Конкретная пара — обновляем только её override (не трогаем глобальные дефолты)
                 overrides = current.get("pair_overrides", {})
                 for sym in pairs:
-                    overrides[sym] = {
-                        "tp_pct": float(new_vals.get("tp_pct", current["tp_pct"])),
-                        "sl_pct": float(new_vals.get("sl_pct", current["sl_pct"])),
-                    }
+                    ov = dict(overrides.get(sym, {}))  # копируем чтобы не затереть другие поля
+                    ov["tp_pct"]       = float(new_vals.get("tp_pct",       current["tp_pct"]))
+                    ov["sl_pct"]       = float(new_vals.get("sl_pct",       current["sl_pct"]))
+                    ov["position_pct"] = float(new_vals.get("position_pct", current["position_pct"]))
+                    if "leverage" in new_vals:
+                        ov["leverage"] = max(1, min(20, int(float(new_vals["leverage"]))))
+                    overrides[sym] = ov
                 current["pair_overrides"] = overrides
-            # Глобальные параметры — сохраняются всегда, независимо от выбранных пар
-            if "position_pct" in new_vals:
-                current["position_pct"] = float(new_vals.get("position_pct", current["position_pct"]))
-            if "leverage" in new_vals:
-                current["leverage"] = max(1, min(20, int(float(new_vals["leverage"]))))
+            # reversal_pause_sec — всегда глобальный
             if "reversal_pause_sec" in new_vals:
                 current["reversal_pause_sec"] = max(0, min(300, int(float(new_vals["reversal_pause_sec"]))))
 
@@ -1097,4 +1100,4 @@ def start_web_server(port: int = 8080):
 
     t = threading.Thread(target=_run, daemon=True, name="WebApp")
     t.start()
-    logger.info(f"[WebApp] Запущен на порту {port} -> http://0.0.0.0:{port}")
+    logger.info(f"[WebApp] Запущен на порту {port} -> http://0.0.0.
