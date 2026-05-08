@@ -164,7 +164,8 @@ class ExchangeConnector:
                     "leverage": leverage,
                 })
             else:
-                self.exchange.set_leverage(leverage, symbol)
+                # Bybit требует category=linear для фьючерсов
+                self.exchange.set_leverage(leverage, symbol, params={"category": "linear"})
             self.profile.leverage = leverage
             logger.info(f"[{self.profile.user_id}] Leverage → x{leverage} ({symbol})")
             return True

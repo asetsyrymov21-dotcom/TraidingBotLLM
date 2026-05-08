@@ -193,8 +193,9 @@ class BotEngine:
         # Применяем плечо если изменилось
         new_leverage = int(dynamic_settings.get("leverage", self._current_leverage))
         if new_leverage != self._current_leverage:
-            if self.exchange.set_leverage(new_leverage):
-                self._current_leverage = new_leverage
+            self.exchange.set_leverage(new_leverage)
+            # Обновляем в любом случае — иначе при ошибке бот спамит попытками каждый тик
+            self._current_leverage = new_leverage
 
         # ── 1. Загрузка и анализ данных ──
         try:
