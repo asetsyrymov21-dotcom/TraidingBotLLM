@@ -364,12 +364,6 @@ class TrendStrategy:
         else:
             pnl = (pos.entry_price - price) * pos.amount
 
-        # Комиссия биржи: ~0.04% от нотионального объёма за сторону × 2 (открытие + закрытие)
-        # pos.amount * price = нотиональный объём в USDT (уже включает плечо из calc_position_size)
-        # НЕ умножаем на leverage ещё раз — иначе комиссия = leverage², что превышает TP profit
-        _commission = abs(pos.amount * price * 0.0008)
-        pnl -= _commission  # комиссия
-
         self.state.total_pnl += pnl
         is_win = pnl > 0
 
