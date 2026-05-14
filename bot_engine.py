@@ -87,6 +87,8 @@ class BotEngine:
         self._last_snapshot: Optional[MarketSnapshot] = None
         self._last_risk_pnl_pct: str = "0.00%"     # Последний дневной PnL % (из тика)
         self._last_risk_drawdown_pct: str = "0.00%" # Последняя просадка % (из тика)
+        self._risk_block_notified: bool = False
+        self._risk_emergency_closed: bool = False
         self._tick_count: int = 0
         self._running: bool = False
         self._initialized: bool = False
@@ -236,16 +238,22 @@ class BotEngine:
             logger.warning(
                 f"[BOT:{self._log_label}] TRADING BLOCKED: {risk_report.reason}"
             )
-            # Telegram: торговля заблокирована
-            if self.notifier:
+            # Telegram: торговля заблокирована (один раз, пока лимит активен)
+            if self.notifier and not self._risk_block_notified:
                 self.notifier.notify_risk_blocked(
                     self.profile.user_id, risk_report.reason,
                     result["risk"]["daily_pnl_pct"], result["risk"]["drawdown_pct"],
                 )
-            # Закрываем активные позиции при достижении лимитов
-            self._emergency_close()
+                self._risk_block_notified = True
+            # Закрываем активные позиции при достижении лимитов один раз.
+            if not self._risk_emergency_closed:
+                self._emergency_close()
+                self._risk_emergency_closed = True
             result["status"] = "risk_blocked"
             return result
+
+        self._risk_block_notified = False
+        self._risk_emergency_closed = False
 
         # ── 3. Режим всегда "trend" — переключение только через SL ──
         if self._current_mode != "trend":
