@@ -1100,4 +1100,4 @@ def start_web_server(port: int = 8080):
 
     t = threading.Thread(target=_run, daemon=True, name="WebApp")
     t.start()
-    logger.info(f"[WebApp] Запущен на порту {port} -> http://0.0.0.
+    logger.info(f"[WebApp] Запущен на порту {port} -> http://0.0.0.0:{port}")
