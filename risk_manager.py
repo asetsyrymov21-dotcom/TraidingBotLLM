@@ -253,4 +253,5 @@ class RiskManager:
                 starting_balance=balance,
                 current_balance=balance,
             )
+            self.peak_balance = balance
         self.daily_stats.current_balance = balance

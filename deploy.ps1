@@ -28,7 +28,7 @@ if (Test-Path ".git\index.lock") {
 
 # ── 1. Git commit + push ──
 Write-Host "`n[1/4] Git..." -ForegroundColor Yellow
-git add -A
+git add -A -- . ':!.claude'
 
 git diff --staged --quiet
 if ($LASTEXITCODE -ne 0) {
