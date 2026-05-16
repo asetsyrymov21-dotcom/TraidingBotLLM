@@ -340,6 +340,11 @@ class TelegramNotifier:
         if side == "short":
             price_change_pct = -price_change_pct
         move_pct = abs(price_change_pct)
+        result_word = "прибыль" if pnl > 0 else "убыток"
+        result_text = (
+            f"Итог сделки: {result_word} {pnl:+.4f} USDT "
+            f"({price_change_pct:+.2f}% движения цены)"
+        )
 
         tp_str = f" (уровень: {tp_price:.4f})" if tp_price else ""
         sl_str = f" (уровень: {sl_price:.4f})" if sl_price else ""
@@ -358,7 +363,8 @@ class TelegramNotifier:
             f"👤 {user_id}{symbol_str}\n"
             f"{'🟢' if side == 'long' else '🔴'} {side.upper()}\n"
             f"📥 Вход: {entry_price:.4f} → 📤 Выход: {close_price:.4f} ({price_change_pct:+.2f}%)\n"
-            f"💰 PnL: {pnl:+.4f} USDT\n"
+            f"💰 <b>{result_text}</b>\n"
+            f"ℹ️ Расчёт бота: без точного учёта комиссий, funding и проскальзывания\n"
             f"{streak}\n\n"
             f"💡 <i>Причина: {reason_text.get(reason, reason)}</i>"
         )
@@ -487,6 +493,11 @@ class TelegramNotifier:
         price_change_pct = (close_price - entry_price) / entry_price * 100
         if side == "short":
             price_change_pct = -price_change_pct
+        result_word = "прибыль" if pnl > 0 else "убыток"
+        result_text = (
+            f"Итог сделки: {result_word} {pnl:+.4f} USDT "
+            f"({price_change_pct:+.2f}% движения цены)"
+        )
         streak = f"🏆 Серия побед: {win_streak}" if win_streak > 0 else f"💀 Серия убытков: {loss_streak}"
 
         tp_str = f" (уровень: {tp_price:.4f})" if tp_price else ""
@@ -506,7 +517,8 @@ class TelegramNotifier:
             f"👤 {user_id}\n"
             f"{'🟢' if side == 'long' else '🔴'} {side.upper()}\n"
             f"📥 Вход: {entry_price:.4f} → 📤 Выход: {close_price:.4f} ({price_change_pct:+.2f}%)\n"
-            f"💰 PnL: <b>{pnl:+.4f} USDT</b>\n"
+            f"💰 <b>{result_text}</b>\n"
+            f"ℹ️ Расчёт бота: без точного учёта комиссий, funding и проскальзывания\n"
             f"{streak}\n\n"
             f"💡 <i>{reason_text.get(reason, reason)}</i>"
         )
@@ -747,4 +759,3 @@ class TelegramErrorHandler(logging.Handler):
             self.notifier.send(tg_msg)
         except Exception:
             pass  # handler никогда не должен падать сам
-

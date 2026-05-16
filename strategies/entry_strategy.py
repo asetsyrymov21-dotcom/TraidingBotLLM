@@ -44,6 +44,7 @@ class EntryPosition:
     amount: float
     tp_price: float
     sl_price: float
+    entry_fee: float = 0.0
     open_time: float = field(default_factory=time.time)
 
 
@@ -186,13 +187,15 @@ class EntryStrategy:
         """Закрывает позицию и обновляет Win/Loss состояние."""
         pos = self.position
         close_side = "sell" if pos.side == "long" else "buy"
-        self.exchange.place_market_order(close_side, pos.amount, reduce_only=True)
+        order = self.exchange.place_market_order(close_side, pos.amount, reduce_only=True)
+        close_price, close_amount, close_fee = self._extract_order_fill(order or {}, price, pos.amount)
 
         # Расчёт PnL
         if pos.side == "long":
-            pnl = (price - pos.entry_price) * pos.amount
+            gross_pnl = (close_price - pos.entry_price) * close_amount
         else:
-            pnl = (pos.entry_price - price) * pos.amount
+            gross_pnl = (pos.entry_price - close_price) * close_amount
+        pnl = gross_pnl - pos.entry_fee - close_fee
 
         self.total_pnl += pnl
         is_win = pnl > 0
@@ -230,15 +233,16 @@ class EntryStrategy:
                     )
 
         logger.info(
-            f"{self._tag} CLOSE {pos.side.upper()} @ {price:.4f} | "
-            f"PnL={pnl:+.4f} | Reason={reason} | "
+            f"{self._tag} CLOSE {pos.side.upper()} @ {close_price:.4f} | "
+            f"GrossPnL={gross_pnl:+.4f} Fees={pos.entry_fee + close_fee:.6f} "
+            f"NetPnL={pnl:+.4f} | Reason={reason} | "
             f"WinStreak={self.win_streak} LossStreak={self.loss_streak}"
         )
 
         # Telegram: позиция закрыта
         if self.notifier:
             self.notifier.notify_entry_close(
-                self.user_id, pos.side, pos.entry_price, price, pnl, reason,
+                self.user_id, pos.side, pos.entry_price, close_price, pnl, reason,
                 win_streak=self.win_streak,
                 loss_streak=self.loss_streak,
                 symbol=self.symbol,
@@ -248,6 +252,39 @@ class EntryStrategy:
 
         self.position = None
         return {"action": f"close_{reason}", "pnl": pnl, "reason": reason, "side": pos.side}
+
+    @staticmethod
+    def _extract_order_fill(order: Dict, fallback_price: float, fallback_amount: float):
+        info = order.get("info") or {}
+
+        def _num(*values):
+            for value in values:
+                try:
+                    if value not in (None, ""):
+                        parsed = float(value)
+                        if parsed > 0:
+                            return parsed
+                except (TypeError, ValueError):
+                    pass
+            return 0.0
+
+        price = _num(
+            order.get("average"), order.get("avgPrice"), order.get("price"),
+            info.get("avgPrice"), info.get("execPrice"),
+        ) or fallback_price
+        amount = _num(
+            order.get("filled"), order.get("executedQty"), order.get("amount"),
+            info.get("executedQty"), info.get("cumExecQty"), info.get("qty"),
+        ) or fallback_amount
+        fee = 0.0
+        if isinstance(order.get("fee"), dict):
+            fee += _num(order["fee"].get("cost"))
+        for item in order.get("fees") or []:
+            if isinstance(item, dict):
+                fee += _num(item.get("cost"))
+        fee += _num(info.get("execFee"), info.get("cumExecFee"))
+
+        return price, amount, fee
 
     def _calc_adaptive_tp_sl(self, snapshot: MarketSnapshot, direction: str):
         """
@@ -316,26 +353,28 @@ class EntryStrategy:
             return {"action": "none", "reason": "order_failed", "pnl": 0.0}
 
         tp, sl, tp_pct, sl_pct, regime = self._calc_adaptive_tp_sl(snapshot, direction)
+        fill_price, fill_amount, entry_fee = self._extract_order_fill(order, price, amount)
 
         self.position = EntryPosition(
             side=direction,
-            entry_price=price,
-            amount=amount,
+            entry_price=fill_price,
+            amount=fill_amount,
             tp_price=tp,
             sl_price=sl,
+            entry_fee=entry_fee,
         )
         self.trade_count += 1
 
         logger.info(
-            f"{self._tag} OPEN {direction.upper()} @ {price:.4f} | "
+            f"{self._tag} OPEN {direction.upper()} @ {fill_price:.4f} | "
             f"TP={tp:.4f} SL={sl:.4f} | Reason={reason} | "
-            f"Amount={amount}"
+            f"Amount={fill_amount} | EntryFee={entry_fee:.6f}"
         )
 
         # Telegram: открыта позиция (win/loss)
         if self.notifier:
             self.notifier.notify_winloss_open(
-                self.user_id, direction, price, amount, tp, sl,
+                self.user_id, direction, fill_price, fill_amount, tp, sl,
                 reason=reason,
                 win_streak=self.win_streak,
                 loss_streak=self.loss_streak,
@@ -505,19 +544,22 @@ class EntryStrategy:
             return {"action": "none", "reason": "order_failed", "pnl": 0.0}
 
         tp, sl, tp_pct, sl_pct, regime = self._calc_adaptive_tp_sl(snapshot, signal.side)
+        fill_price, fill_amount, entry_fee = self._extract_order_fill(order, price, amount)
 
         self.position = EntryPosition(
             side=signal.side,
-            entry_price=price,
-            amount=amount,
+            entry_price=fill_price,
+            amount=fill_amount,
             tp_price=tp,
             sl_price=sl,
+            entry_fee=entry_fee,
         )
         self.trade_count += 1
 
         logger.info(
-            f"{self._tag} OPEN {signal.side.upper()} @ {price:.4f} | "
-            f"TP={tp:.4f} SL={sl:.4f} | {signal.reason}"
+            f"{self._tag} OPEN {signal.side.upper()} @ {fill_price:.4f} | "
+            f"TP={tp:.4f} SL={sl:.4f} | Amount={fill_amount} | "
+            f"EntryFee={entry_fee:.6f} | {signal.reason}"
         )
 
         # Telegram: первый вход по индикаторам
@@ -531,7 +573,7 @@ class EntryStrategy:
                 bb_above_mid = snapshot.close > snapshot.bb_mid
 
             self.notifier.notify_entry_open(
-                self.user_id, signal.side, price, amount, tp, sl,
+                self.user_id, signal.side, fill_price, fill_amount, tp, sl,
                 signal.reason, signal.confidence,
                 rsi=snapshot.rsi,
                 macd_above=macd_above,

@@ -35,6 +35,7 @@ class ActivePosition:
     tp_price: float
     sl_price: float
     order_id: Optional[str] = None
+    entry_fee: float = 0.0
     open_time: float = field(default_factory=time.time)
     best_price: float = 0.0                 # Лучшая цена за время жизни позиции
     trail_stop_price: Optional[float] = None  # Текущий уровень trailing stop
@@ -274,27 +275,30 @@ class TrendStrategy:
 
         # ── Расчёт TP/SL (ATR-адаптивный) ──
         tp_price, sl_price = self._calc_tp_sl(price, side, snapshot=snapshot)
+        fill_price, fill_amount, entry_fee = self._extract_order_fill(order, price, amount)
 
         self.state.position = ActivePosition(
             side=side,
-            entry_price=price,
-            amount=amount,
+            entry_price=fill_price,
+            amount=fill_amount,
             tp_price=tp_price,
             sl_price=sl_price,
             order_id=order.get("id"),
-            best_price=price,
+            entry_fee=entry_fee,
+            best_price=fill_price,
         )
         self.state.trade_count += 1
 
         logger.info(
-            f"{self._tag} OPEN {side.upper()} @ {price:.4f} | "
-            f"TP={tp_price:.4f} SL={sl_price:.4f} | Amount={amount} | RSI={rsi:.1f}"
+            f"{self._tag} OPEN {side.upper()} @ {fill_price:.4f} | "
+            f"TP={tp_price:.4f} SL={sl_price:.4f} | Amount={fill_amount} | "
+            f"EntryFee={entry_fee:.6f} | RSI={rsi:.1f}"
         )
 
         # Telegram: открыта позиция
         if self.notifier:
             self.notifier.notify_trend_open(
-                self.user_id, side, price, amount, tp_price, sl_price,
+                self.user_id, side, fill_price, fill_amount, tp_price, sl_price,
                 rsi, snapshot.ema_fast or 0.0, snapshot.ema_slow or 0.0,
                 self.state.last_result.value, self.state.current_size_multiplier,
                 symbol=self.symbol,
@@ -353,19 +357,54 @@ class TrendStrategy:
             sl = price * (1 + sl_pct)
         return tp, sl
 
+    @staticmethod
+    def _extract_order_fill(order: Dict, fallback_price: float, fallback_amount: float):
+        info = order.get("info") or {}
+
+        def _num(*values):
+            for value in values:
+                try:
+                    if value not in (None, ""):
+                        parsed = float(value)
+                        if parsed > 0:
+                            return parsed
+                except (TypeError, ValueError):
+                    pass
+            return 0.0
+
+        price = _num(
+            order.get("average"), order.get("avgPrice"), order.get("price"),
+            info.get("avgPrice"), info.get("execPrice"),
+        ) or fallback_price
+        amount = _num(
+            order.get("filled"), order.get("executedQty"), order.get("amount"),
+            info.get("executedQty"), info.get("cumExecQty"), info.get("qty"),
+        ) or fallback_amount
+        fee = 0.0
+        if isinstance(order.get("fee"), dict):
+            fee += _num(order["fee"].get("cost"))
+        for item in order.get("fees") or []:
+            if isinstance(item, dict):
+                fee += _num(item.get("cost"))
+        fee += _num(info.get("execFee"), info.get("cumExecFee"))
+
+        return price, amount, fee
+
     def _close_position(self, price: float, reason: str) -> float:
         pos = self.state.position
         if not pos:
             return 0.0
 
         close_side = "sell" if pos.side == "long" else "buy"
-        self.exchange.place_market_order(close_side, pos.amount, reduce_only=True)
+        order = self.exchange.place_market_order(close_side, pos.amount, reduce_only=True)
+        close_price, close_amount, close_fee = self._extract_order_fill(order or {}, price, pos.amount)
 
         # Расчёт PnL
         if pos.side == "long":
-            pnl = (price - pos.entry_price) * pos.amount
+            gross_pnl = (close_price - pos.entry_price) * close_amount
         else:
-            pnl = (pos.entry_price - price) * pos.amount
+            gross_pnl = (pos.entry_price - close_price) * close_amount
+        pnl = gross_pnl - pos.entry_fee - close_fee
 
         self.state.total_pnl += pnl
         is_win = pnl > 0
@@ -408,15 +447,16 @@ class TrendStrategy:
                 )
 
         logger.info(
-            f"{self._tag} CLOSE {pos.side.upper()} @ {price:.4f} | "
-            f"PnL={pnl:.4f} | Reason={reason} | "
+            f"{self._tag} CLOSE {pos.side.upper()} @ {close_price:.4f} | "
+            f"GrossPnL={gross_pnl:.4f} Fees={pos.entry_fee + close_fee:.6f} "
+            f"NetPnL={pnl:.4f} | Reason={reason} | "
             f"Win={self.state.win_streak} Loss={self.state.loss_streak}"
         )
 
         # Telegram: позиция закрыта
         if self.notifier:
             self.notifier.notify_trend_close(
-                self.user_id, pos.side, pos.entry_price, price, pnl, reason,
+                self.user_id, pos.side, pos.entry_price, close_price, pnl, reason,
                 self.state.win_streak, self.state.loss_streak,
                 symbol=self.symbol,
                 tp_price=pos.tp_price,

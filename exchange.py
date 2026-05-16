@@ -361,9 +361,11 @@ class ExchangeConnector:
                 amount=amount,
                 params=params,
             )
+            order = self._enrich_order_fill(order)
             logger.info(
                 f"[{self.profile.user_id}] MARKET {side.upper()} {amount} "
-                f"{self.profile.symbol} | id={order.get('id')}"
+                f"{self.profile.symbol} | id={order.get('id')} "
+                f"avg={order.get('average')} filled={order.get('filled')} fee={order.get('fee')}"
             )
             return order
 
@@ -381,6 +383,54 @@ class ExchangeConnector:
                 return {"orderId": "already_closed", "status": "FILLED", "executedQty": str(amount)}
             logger.error(f"place_market_order error ({side} {amount}): {e}")
             return None
+
+    def _enrich_order_fill(self, order: Dict) -> Dict:
+        """Дочитывает fill/fee для market-order, если биржа не отдала их сразу."""
+        order_id = order.get("id") or order.get("orderId")
+        if not order_id:
+            return order
+
+        enriched = dict(order)
+
+        try:
+            time.sleep(0.3)
+            fetched = self.exchange.fetch_order(order_id, self.profile.symbol)
+            for key in ("average", "filled", "fee", "fees", "cost", "price"):
+                if fetched.get(key) not in (None, "", 0):
+                    enriched[key] = fetched.get(key)
+            if fetched.get("info"):
+                info = dict(enriched.get("info") or {})
+                info.update(fetched.get("info") or {})
+                enriched["info"] = info
+        except Exception as e:
+            logger.debug(f"fetch_order enrich failed for {order_id}: {e}")
+
+        try:
+            trades = self.exchange.fetch_my_trades(self.profile.symbol, None, 20, {"orderId": order_id})
+            if trades:
+                filled = sum(float(t.get("amount") or 0) for t in trades)
+                cost = sum(float(t.get("cost") or 0) for t in trades)
+                if filled > 0:
+                    enriched["filled"] = filled
+                    enriched["average"] = cost / filled if cost > 0 else enriched.get("average")
+
+                fees = []
+                fee_total = 0.0
+                for trade in trades:
+                    fee = trade.get("fee")
+                    if isinstance(fee, dict):
+                        fees.append(fee)
+                        try:
+                            fee_total += float(fee.get("cost") or 0)
+                        except (TypeError, ValueError):
+                            pass
+                if fees:
+                    enriched["fees"] = fees
+                    enriched["fee"] = {"cost": fee_total, "currency": fees[0].get("currency")}
+        except Exception as e:
+            logger.debug(f"fetch_my_trades enrich failed for {order_id}: {e}")
+
+        return enriched
 
     def place_limit_order(
         self,
