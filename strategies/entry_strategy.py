@@ -146,37 +146,39 @@ class EntryStrategy:
     def _manage_position(self, snapshot: MarketSnapshot) -> Dict:
         pos = self.position
         price = snapshot.close
+        high = getattr(snapshot, "high", price)
+        low = getattr(snapshot, "low", price)
 
         # ── Экстренный сквиз -15% (если SL не сработал) ──
         emergency_pct = getattr(self.cfg, 'emergency_squeeze_pct', 0.15)
         if pos.side == "long":
-            drop = (pos.entry_price - price) / pos.entry_price
+            drop = (pos.entry_price - low) / pos.entry_price
             if drop >= emergency_pct:
                 logger.warning(
                     f"{self._tag} EMERGENCY SQUEEZE! LONG drop={drop*100:.1f}% >= {emergency_pct*100:.0f}%"
                 )
-                return self._do_close(price, "emergency_squeeze")
+                return self._do_close(low, "emergency_squeeze")
         else:
-            rise = (price - pos.entry_price) / pos.entry_price
+            rise = (high - pos.entry_price) / pos.entry_price
             if rise >= emergency_pct:
                 logger.warning(
                     f"{self._tag} EMERGENCY SQUEEZE! SHORT rise={rise*100:.1f}% >= {emergency_pct*100:.0f}%"
                 )
-                return self._do_close(price, "emergency_squeeze")
+                return self._do_close(high, "emergency_squeeze")
 
         # ── TP ──
-        hit_tp = (pos.side == "long" and price >= pos.tp_price) or (
-            pos.side == "short" and price <= pos.tp_price
+        hit_tp = (pos.side == "long" and high >= pos.tp_price) or (
+            pos.side == "short" and low <= pos.tp_price
         )
         if hit_tp:
-            return self._do_close(price, "tp")
+            return self._do_close(pos.tp_price, "tp")
 
         # ── SL ──
-        hit_sl = (pos.side == "long" and price <= pos.sl_price) or (
-            pos.side == "short" and price >= pos.sl_price
+        hit_sl = (pos.side == "long" and low <= pos.sl_price) or (
+            pos.side == "short" and high >= pos.sl_price
         )
         if hit_sl:
-            return self._do_close(price, "sl")
+            return self._do_close(pos.sl_price, "sl")
 
         return {"action": "hold", "side": pos.side, "pnl": 0.0, "reason": ""}
 

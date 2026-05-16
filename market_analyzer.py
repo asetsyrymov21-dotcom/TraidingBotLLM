@@ -18,9 +18,14 @@ logger = logging.getLogger(__name__)
 class MarketSnapshot:
     """Срез рынка: цена + RSI/MACD/BB + объём + ATR"""
     close: float
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
     rsi: Optional[float] = None
     macd_line: Optional[float] = None
     macd_signal: Optional[float] = None
+    ema_fast: Optional[float] = None
+    ema_slow: Optional[float] = None
     bb_upper: Optional[float] = None
     bb_lower: Optional[float] = None
     bb_mid: Optional[float] = None
@@ -55,13 +60,21 @@ class MarketAnalyzer:
             logger.warning(f"{prefix}Not enough candles: {len(ohlcv)} < 40")
             return None
 
+        opens   = np.array([c[1] for c in ohlcv], dtype=float)
+        highs   = np.array([c[2] for c in ohlcv], dtype=float)
+        lows    = np.array([c[3] for c in ohlcv], dtype=float)
         closes  = np.array([c[4] for c in ohlcv], dtype=float)
         volumes = np.array([c[5] for c in ohlcv], dtype=float)
 
         rsi  = self._rsi(closes, 14)[-1]
         macd_line, macd_signal, _ = self._macd(closes)
         bb_upper, bb_mid, bb_lower = self._bollinger(closes)
+        ema_fast = self._ema(closes, 9)[-1]
+        ema_slow = self._ema(closes, 21)[-1]
 
+        open_ = opens[-1]
+        high = highs[-1]
+        low = lows[-1]
         close = closes[-1]
 
         # ATR (волатильность)
@@ -75,10 +88,15 @@ class MarketAnalyzer:
         avg_volume = float(np.mean(avg_vol_window)) if len(avg_vol_window) > 0 else 0.0
 
         snapshot = MarketSnapshot(
+            open=open_,
+            high=high,
+            low=low,
             close=close,
             rsi=rsi,
             macd_line=macd_line[-1] if macd_line is not None else None,
             macd_signal=macd_signal[-1] if macd_signal is not None else None,
+            ema_fast=ema_fast,
+            ema_slow=ema_slow,
             bb_upper=bb_upper,
             bb_mid=bb_mid,
             bb_lower=bb_lower,
@@ -88,8 +106,9 @@ class MarketAnalyzer:
             atr_pct=atr_pct,
         )
         logger.info(
-            f"{prefix}Close={close:.4f} | RSI={rsi:.1f} | "
+            f"{prefix}OHLC={open_:.4f}/{high:.4f}/{low:.4f}/{close:.4f} | RSI={rsi:.1f} | "
             f"MACD={snapshot.macd_line:.6f} Sig={snapshot.macd_signal:.6f} | "
+            f"EMA9={ema_fast:.4f} EMA21={ema_slow:.4f} | "
             f"BB [{bb_lower:.4f} / {bb_mid:.4f} / {bb_upper:.4f}] | "
             f"ATR={atr_val:.4f} ({atr_pct*100:.3f}%) | "
             f"Vol={current_volume:.0f} AvgVol={avg_volume:.0f}"
@@ -99,6 +118,16 @@ class MarketAnalyzer:
     # ──────────────────────────────────────────
     #  Индикаторы
     # ──────────────────────────────────────────
+
+    @staticmethod
+    def _ema(closes: np.ndarray, period: int) -> np.ndarray:
+        """EMA"""
+        ema = np.zeros_like(closes)
+        ema[0] = closes[0]
+        k = 2.0 / (period + 1)
+        for i in range(1, len(closes)):
+            ema[i] = closes[i] * k + ema[i - 1] * (1 - k)
+        return ema
 
     @staticmethod
     def _rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:

@@ -124,6 +124,8 @@ class TrendStrategy:
     def _manage_position(self, snapshot: MarketSnapshot) -> Dict:
         pos = self.state.position
         price = snapshot.close
+        high = getattr(snapshot, "high", price)
+        low = getattr(snapshot, "low", price)
         result = {"action": "hold", "side": pos.side, "pnl": 0.0, "reason": ""}
 
         # ── Таймаут: позиция висит слишком долго ──
@@ -138,44 +140,45 @@ class TrendStrategy:
             return result
 
         # ── Анти-сквиз: резкое движение против позиции (порог 15%) ──
-        if self._check_squeeze(pos, price):
-            logger.warning(f"{self._tag} SQUEEZE detected! Closing {pos.side} @ {price}")
-            pnl = self._close_position(price, "squeeze")
+        squeeze_price = low if pos.side == "long" else high
+        if self._check_squeeze(pos, squeeze_price):
+            logger.warning(f"{self._tag} SQUEEZE detected! Closing {pos.side} @ {squeeze_price}")
+            pnl = self._close_position(squeeze_price, "squeeze")
             result.update({"action": "close_squeeze", "pnl": pnl})
             return result
 
         # ── Обновление Trailing Stop ──
-        self._update_trailing_stop(pos, price)
+        self._update_trailing_stop(pos, high if pos.side == "long" else low)
 
         # ── Проверка Trailing Stop (если активирован) ──
         if pos.trail_active and pos.trail_stop_price is not None:
             triggered = (
-                (pos.side == "long"  and price <= pos.trail_stop_price) or
-                (pos.side == "short" and price >= pos.trail_stop_price)
+                (pos.side == "long"  and low <= pos.trail_stop_price) or
+                (pos.side == "short" and high >= pos.trail_stop_price)
             )
             if triggered:
                 logger.info(
-                    f"{self._tag} TRAIL STOP triggered | {pos.side.upper()} @ {price:.4f} | "
+                    f"{self._tag} TRAIL STOP triggered | {pos.side.upper()} @ {pos.trail_stop_price:.4f} | "
                     f"trail_stop={pos.trail_stop_price:.4f} best={pos.best_price:.4f}"
                 )
-                pnl = self._close_position(price, "trail_stop")
+                pnl = self._close_position(pos.trail_stop_price, "trail_stop")
                 result.update({"action": "close_trail_stop", "pnl": pnl, "reason": "trail_stop"})
                 return result
 
         # ── Проверка TP ──
-        if (pos.side == "long" and price >= pos.tp_price) or (
-            pos.side == "short" and price <= pos.tp_price
+        if (pos.side == "long" and high >= pos.tp_price) or (
+            pos.side == "short" and low <= pos.tp_price
         ):
-            pnl = self._close_position(price, "tp")
+            pnl = self._close_position(pos.tp_price, "tp")
             result.update({"action": "close_tp", "pnl": pnl})
             return result
 
         # ── Проверка SL (только если trailing ещё не активирован) ──
         if not pos.trail_active:
-            if (pos.side == "long" and price <= pos.sl_price) or (
-                pos.side == "short" and price >= pos.sl_price
+            if (pos.side == "long" and low <= pos.sl_price) or (
+                pos.side == "short" and high >= pos.sl_price
             ):
-                pnl = self._close_position(price, "sl")
+                pnl = self._close_position(pos.sl_price, "sl")
                 result.update({"action": "close_sl", "pnl": pnl})
                 _rev_side = "short" if pos.side == "long" else "long"
                 result["reverse_signal"] = _rev_side
@@ -292,7 +295,7 @@ class TrendStrategy:
         if self.notifier:
             self.notifier.notify_trend_open(
                 self.user_id, side, price, amount, tp_price, sl_price,
-                rsi, 0.0, 0.0,
+                rsi, snapshot.ema_fast or 0.0, snapshot.ema_slow or 0.0,
                 self.state.last_result.value, self.state.current_size_multiplier,
                 symbol=self.symbol,
                 leverage=self.exchange.profile.leverage,
@@ -483,38 +486,40 @@ class TrendStrategy:
 
         pos   = self.state.position
         price = snapshot.close
+        high = getattr(snapshot, "high", price)
+        low = getattr(snapshot, "low", price)
         result: Dict = {"action": "hold", "side": pos.side, "pnl": 0.0, "reason": ""}
 
         # ── Обновление Trailing Stop ──
-        self._update_trailing_stop(pos, price)
+        self._update_trailing_stop(pos, high if pos.side == "long" else low)
 
         # ── Проверка Trailing Stop ──
         if pos.trail_active and pos.trail_stop_price is not None:
             triggered = (
-                (pos.side == "long"  and price <= pos.trail_stop_price) or
-                (pos.side == "short" and price >= pos.trail_stop_price)
+                (pos.side == "long"  and low <= pos.trail_stop_price) or
+                (pos.side == "short" and high >= pos.trail_stop_price)
             )
             if triggered:
                 logger.info(
-                    f"{self._tag} [wait] TRAIL STOP | {pos.side.upper()} @ {price:.4f} "
+                    f"{self._tag} [wait] TRAIL STOP | {pos.side.upper()} @ {pos.trail_stop_price:.4f} "
                     f"trail={pos.trail_stop_price:.4f}"
                 )
-                pnl = self._close_position(price, "trail_stop")
+                pnl = self._close_position(pos.trail_stop_price, "trail_stop")
                 result.update({"action": "close_trail_stop", "pnl": pnl})
                 return result
 
         # ── Проверка TP ──
-        if (pos.side == "long"  and price >= pos.tp_price) or \
-           (pos.side == "short" and price <= pos.tp_price):
-            pnl = self._close_position(price, "tp")
+        if (pos.side == "long"  and high >= pos.tp_price) or \
+           (pos.side == "short" and low <= pos.tp_price):
+            pnl = self._close_position(pos.tp_price, "tp")
             result.update({"action": "close_tp", "pnl": pnl})
             return result
 
         # ── Проверка SL (только если trailing ещё не активирован) ──
         if not pos.trail_active:
-            if (pos.side == "long"  and price <= pos.sl_price) or \
-               (pos.side == "short" and price >= pos.sl_price):
-                pnl = self._close_position(price, "sl")
+            if (pos.side == "long"  and low <= pos.sl_price) or \
+               (pos.side == "short" and high >= pos.sl_price):
+                pnl = self._close_position(pos.sl_price, "sl")
                 result.update({"action": "close_sl", "pnl": pnl})
                 return result
 
