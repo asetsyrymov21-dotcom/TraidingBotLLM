@@ -916,10 +916,10 @@ def create_app():
         password = os.environ.get("WEB_PASSWORD", "")
         user = os.environ.get("WEB_USER", "admin")
 
-        # Без WEB_PASSWORD закрываем внешний доступ, чтобы порт 8080 нельзя было
-        # использовать снаружи случайно. Локальный доступ нужен для health-check/debug.
+        # Без WEB_PASSWORD оставляем внешний просмотр, но блокируем любые действия,
+        # которые меняют состояние бота или настройки.
         if not password:
-            if _is_local_request():
+            if _is_local_request() or request.method in ("GET", "HEAD", "OPTIONS"):
                 return None
             logger.warning(f"[WebApp] blocked unauthenticated external request from {request.remote_addr}")
             return jsonify({"ok": False, "error": "web_password_required"}), 403
