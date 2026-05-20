@@ -3,6 +3,8 @@
 # ============================================================
 
 import copy
+import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -876,15 +878,65 @@ def _notify_settings_changed(old: dict, new: dict, pairs: list):
         logger.warning(f"[WebApp] _notify_settings_changed error: {e}", exc_info=True)
 
 
+def _audit_web_action(action: str, meta: dict):
+    """Пишет JSONL-аудит действий веб-интерфейса."""
+    try:
+        os.makedirs("data", exist_ok=True)
+        record = {
+            "ts": time.time(),
+            "action": action,
+            **meta,
+        }
+        with open(os.path.join("data", "web_audit.log"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug(f"[WebApp] audit failed: {e}")
+
+
 def create_app():
     try:
-        from flask import Flask, jsonify, request
+        from flask import Flask, Response, jsonify, request
     except ImportError:
         logger.error("[WebApp] Flask не установлен.")
         return None
 
     app = Flask(__name__)
     app.logger.setLevel(logging.WARNING)
+
+    def _is_local_request() -> bool:
+        try:
+            addr = request.remote_addr or ""
+            ip = ipaddress.ip_address(addr)
+            return ip.is_loopback
+        except Exception:
+            return False
+
+    @app.before_request
+    def _require_web_auth():
+        password = os.environ.get("WEB_PASSWORD", "")
+        user = os.environ.get("WEB_USER", "admin")
+
+        # Без WEB_PASSWORD закрываем внешний доступ, чтобы порт 8080 нельзя было
+        # использовать снаружи случайно. Локальный доступ нужен для health-check/debug.
+        if not password:
+            if _is_local_request():
+                return None
+            logger.warning(f"[WebApp] blocked unauthenticated external request from {request.remote_addr}")
+            return jsonify({"ok": False, "error": "web_password_required"}), 403
+
+        auth = request.authorization
+        if (
+            auth and
+            hmac.compare_digest(auth.username or "", user) and
+            hmac.compare_digest(auth.password or "", password)
+        ):
+            return None
+
+        return Response(
+            "Authentication required",
+            401,
+            {"WWW-Authenticate": 'Basic realm="Trading Bot"'},
+        )
 
     @app.route("/")
     def index():
@@ -935,6 +987,13 @@ def create_app():
 
             # Telegram: уведомление об изменении настроек
             if saved:
+                _audit_web_action("settings_save", {
+                    "ip": request.headers.get("X-Forwarded-For", request.remote_addr),
+                    "user_agent": request.headers.get("User-Agent", ""),
+                    "pairs": pairs,
+                    "old": old,
+                    "new": current,
+                })
                 try:
                     _notify_settings_changed(old, current, pairs)
                 except Exception as _tg_err:
@@ -958,6 +1017,10 @@ def create_app():
             flag_path = os.path.join("data", "bot_pause.flag")
             with open(flag_path, "w") as f:
                 f.write(str(time.time()))
+            _audit_web_action("bot_stop", {
+                "ip": request.headers.get("X-Forwarded-For", request.remote_addr),
+                "user_agent": request.headers.get("User-Agent", ""),
+            })
             logger.info("[WebApp] Bot STOP flag создан")
             return jsonify({"ok": True})
         except Exception as e:
@@ -971,6 +1034,10 @@ def create_app():
             flag_path = os.path.join("data", "bot_pause.flag")
             if os.path.exists(flag_path):
                 os.remove(flag_path)
+            _audit_web_action("bot_start", {
+                "ip": request.headers.get("X-Forwarded-For", request.remote_addr),
+                "user_agent": request.headers.get("User-Agent", ""),
+            })
             logger.info("[WebApp] Bot START — флаг паузы удалён")
             return jsonify({"ok": True})
         except Exception as e:

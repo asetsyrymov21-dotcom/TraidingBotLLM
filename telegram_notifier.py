@@ -127,6 +127,9 @@ class TelegramNotifier:
         """
         if not self.enabled or not self.bot_token or not self.chat_id:
             return
+        if self._batching:
+            self._send_raw(text)
+            return
         footer = self._build_footer()
         if footer:
             text += "\n\n" + footer

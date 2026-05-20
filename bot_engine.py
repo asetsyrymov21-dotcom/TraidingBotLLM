@@ -89,6 +89,7 @@ class BotEngine:
         self._last_risk_drawdown_pct: str = "0.00%" # Последняя просадка % (из тика)
         self._risk_block_notified: bool = False
         self._risk_emergency_closed: bool = False
+        self._pause_stop_done: bool = False
         self._tick_count: int = 0
         self._running: bool = False
         self._initialized: bool = False
@@ -188,9 +189,15 @@ class BotEngine:
         # ── PAUSE: бот остановлен через веб-интерфейс ──
         pause_flag = os.path.join("data", "bot_pause.flag")
         if os.path.exists(pause_flag):
-            logger.info(f"[BOT:{self._log_label}] PAUSED — флаг bot_pause.flag активен, тик пропущен")
+            if not self._pause_stop_done:
+                self._stop_for_web_pause()
+                self._pause_stop_done = True
+            logger.info(f"[BOT:{self._log_label}] PAUSED — флаг bot_pause.flag активен, бот остановлен")
             result["status"] = "paused"
+            if self._last_snapshot:
+                self._write_status(self._last_snapshot, bot_state="paused", bot_state_label="Остановлен")
             return result
+        self._pause_stop_done = False
 
         # Применяем плечо если изменилось (per-pair override имеет приоритет над глобальным)
         _pair_overrides = dynamic_settings.get("pair_overrides") or {}
@@ -262,16 +269,22 @@ class BotEngine:
         result["mode"] = self._current_mode
 
         # ── 4. Тик стратегий ──
-        # EntryStrategy — ГЛАВНАЯ (Win/Loss система).
-        # Первый вход — по 3 индикаторам (RSI+MACD+BB) только в тренде.
-        # Последующие — win/loss продолжение/переворот (в любом режиме).
-        entry_result = self.entry_bot.tick(snapshot)
-        result["actions"]["entry"] = entry_result
-
-        # TrendStrategy — вторичная, запускается только если EntryStrategy без позиции
-        if self.entry_bot.position is None and self._current_mode == "trend":
+        # На одной паре допускаем только одну активную стратегию. Если Trend уже
+        # держит позицию, сначала сопровождаем её и не даём Entry открыть вторую.
+        if self.trend_bot.state.position is not None and self.entry_bot.position is None:
             trend_result = self.trend_bot.tick(snapshot)
             result["actions"]["trend"] = trend_result
+        else:
+            # EntryStrategy — ГЛАВНАЯ (Win/Loss система).
+            # Первый вход — по 3 индикаторам (RSI+MACD+BB) только в тренде.
+            # Последующие — win/loss продолжение/переворот (в любом режиме).
+            entry_result = self.entry_bot.tick(snapshot)
+            result["actions"]["entry"] = entry_result
+
+            # TrendStrategy — вторичная, запускается только если EntryStrategy без позиции
+            if self.entry_bot.position is None and self._current_mode == "trend":
+                trend_result = self.trend_bot.tick(snapshot)
+                result["actions"]["trend"] = trend_result
 
         # В wait-режиме управляем позицией TrendStrategy ТОЛЬКО через TP/SL
         # (без anti-squeeze, чтобы позиция не закрылась при переходе в флэт)
@@ -305,7 +318,7 @@ class BotEngine:
 
         return result
 
-    def _write_status(self, snapshot: MarketSnapshot):
+    def _write_status(self, snapshot: MarketSnapshot, bot_state: Optional[str] = None, bot_state_label: Optional[str] = None):
         """Пишет текущее состояние в data/status/<symbol>.json для веб-интерфейса."""
         try:
             pos = self.entry_bot.position or (
@@ -325,18 +338,23 @@ class BotEngine:
             # Определяем состояние бота для виджета активности
             eb = self.entry_bot
             if eb.position is not None:
-                bot_state = "in_position"
-                bot_state_label = "В позиции"
+                detected_state = "in_position"
+                detected_label = "В позиции"
             elif eb.paused_until > time.time():
                 remaining = int(eb.paused_until - time.time())
-                bot_state = "paused"
-                bot_state_label = f"Пауза {remaining}с"
+                detected_state = "paused"
+                detected_label = f"Пауза {remaining}с"
             elif eb.pause_candles_left > 0:
-                bot_state = "delay"
-                bot_state_label = "Задержка после убытка"
+                detected_state = "delay"
+                detected_label = "Задержка после убытка"
             else:
-                bot_state = "searching"
-                bot_state_label = "Ищу сигнал"
+                detected_state = "searching"
+                detected_label = "Ищу сигнал"
+
+            if bot_state is None:
+                bot_state = detected_state
+            if bot_state_label is None:
+                bot_state_label = detected_label
 
             status = {
                 "symbol":          self.profile.symbol,
@@ -392,6 +410,24 @@ class BotEngine:
         # Telegram: экстренное закрытие
         if self.notifier:
             self.notifier.notify_emergency_close(self.profile.user_id)
+
+    def _stop_for_web_pause(self):
+        """Остановка через веб-интерфейс: закрыть позиции и снять ордера один раз."""
+        logger.warning(f"[BOT:{self._log_label}] WEB STOP — закрываем позиции и ордера")
+        try:
+            self.trend_bot.force_close()
+        except Exception as e:
+            logger.error(f"[BOT:{self._log_label}] trend force_close failed: {e}")
+        try:
+            self.entry_bot.force_close()
+        except Exception as e:
+            logger.error(f"[BOT:{self._log_label}] entry force_close failed: {e}")
+        try:
+            self.exchange.cancel_all_orders()
+            self.exchange.close_all_positions()
+        except Exception as e:
+            logger.error(f"[BOT:{self._log_label}] exchange stop failed: {e}")
+        self._current_mode = None
 
     # ──────────────────────────────────────────
     #  Статистика
