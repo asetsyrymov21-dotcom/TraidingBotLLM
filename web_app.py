@@ -376,9 +376,14 @@ async function saveSettings() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({settings:settings, pairs:selectedPairs}),
     });
-    var res = await r.json();
+    var res = {};
+    try { res = await r.json(); } catch(_) {}
     var lbl = selectedPairs.length ? selectedPairs.join(', ') : 'все пары';
-    if (res.ok) {
+    if (r.status === 401) {
+      showToast('Нужен логин/пароль: обнови страницу', true);
+    } else if (r.status === 403 && res.error === 'web_password_required') {
+      showToast('Нужен WEB_PASSWORD и перезапуск бота', true);
+    } else if (res.ok) {
       showToast('Сохранено: '+lbl, false);
       // Перезагружаем актуальные значения с сервера, чтобы глобальное
       // плечо не "плыло" при переключении между парами
