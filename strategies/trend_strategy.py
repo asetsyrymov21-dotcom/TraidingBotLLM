@@ -54,6 +54,7 @@ class TrendBotState:
     total_pnl: float = 0.0
     trade_count: int = 0
     win_count: int = 0
+    last_side: str = ""              # Сторона последней закрытой позиции
     pending_reversal_side: str = ""  # Сторона разворота после SL (ждёт паузы)
     sl_streak: int = 0              # Подряд идущих SL-закрытий (при 3 → поиск входа)
 
@@ -113,7 +114,7 @@ class TrendStrategy:
             side = self.state.pending_reversal_side
             self.state.pending_reversal_side = ""
             logger.info(f"{self._tag} REVERSAL → открываем {side.upper()} (после SL)")
-            return self._open_position(side, snapshot)
+            return self._open_position(side, snapshot, "sl_reverse")
 
         # ── Поиск точки входа ──
         return self._find_entry(snapshot)
@@ -226,11 +227,21 @@ class TrendStrategy:
             f"{self._tag} find_entry | close={snapshot.close:.4f} RSI={rsi:.1f}"
         )
 
-        # ── Направление по RSI ──
-        if rsi > self.cfg.rsi_long_min:
+        # ── WIN/LOSS логика важнее нового RSI-сигнала ──
+        if self.state.last_result == TradeResult.WIN and self.state.last_side:
+            side = self.state.last_side
+            entry_reason = "win_continue"
+            logger.info(f"{self._tag} WIN continuation → {side.upper()}")
+        elif self.state.last_result == TradeResult.LOSS and self.state.last_side:
+            side = "short" if self.state.last_side == "long" else "long"
+            entry_reason = "loss_reverse"
+            logger.info(f"{self._tag} LOSS reversal → {side.upper()} (was {self.state.last_side})")
+        elif rsi > self.cfg.rsi_long_min:
             side = "long"
+            entry_reason = "rsi_entry"
         elif rsi < self.cfg.rsi_short_max:
             side = "short"
+            entry_reason = "rsi_entry"
         else:
             result["reason"] = f"rsi_neutral ({rsi:.1f})"
             logger.info(f"{self._tag} skip entry | reason={result['reason']}")
@@ -244,9 +255,9 @@ class TrendStrategy:
             logger.info(f"{self._tag} skip entry | reason={result['reason']}")
             return result
 
-        return self._open_position(side, snapshot)
+        return self._open_position(side, snapshot, entry_reason)
 
-    def _open_position(self, side: str, snapshot: MarketSnapshot) -> Dict:
+    def _open_position(self, side: str, snapshot: MarketSnapshot, reason: str = "rsi_entry") -> Dict:
         """Открывает позицию в указанную сторону. Вызывается из _find_entry и при развороте."""
         result = {"action": "none", "side": None, "pnl": 0.0, "reason": ""}
         rsi = snapshot.rsi or 50.0
@@ -305,7 +316,7 @@ class TrendStrategy:
                 leverage=self.exchange.profile.leverage,
             )
 
-        result.update({"action": f"open_{side}", "side": side, "reason": "rsi_entry"})
+        result.update({"action": f"open_{side}", "side": side, "reason": reason})
         return result
 
     # ──────────────────────────────────────────
@@ -408,6 +419,7 @@ class TrendStrategy:
 
         self.state.total_pnl += pnl
         is_win = pnl > 0
+        self.state.last_side = pos.side
 
         # Обновление серий и мультипликатора
         if is_win:
