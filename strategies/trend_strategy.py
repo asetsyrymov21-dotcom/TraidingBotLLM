@@ -172,7 +172,13 @@ class TrendStrategy:
             pos.side == "short" and low <= pos.tp_price
         ):
             pnl = self._close_position(pos.tp_price, "tp")
-            result.update({"action": "close_tp", "pnl": pnl})
+            open_result = self._open_position(pos.side, snapshot, "tp_reopen")
+            result.update({
+                "action": f"close_tp_{open_result['action']}",
+                "pnl": pnl,
+                "reason": "tp_reopen",
+                "open": open_result,
+            })
             return result
 
         # ── Проверка SL (только если trailing ещё не активирован) ──
@@ -211,7 +217,15 @@ class TrendStrategy:
                             )
                     except Exception:
                         pass
-                    self.state.pending_reversal_side = _rev_side
+                    if self.state.paused_until > time.time():
+                        self.state.pending_reversal_side = _rev_side
+                    else:
+                        open_result = self._open_position(_rev_side, snapshot, "sl_reverse")
+                        result.update({
+                            "action": f"close_sl_{open_result['action']}",
+                            "reason": "sl_reverse",
+                            "open": open_result,
+                        })
                     # Задержку свечей НЕ ставим — разворот должен быть мгновенным
 
                 return result

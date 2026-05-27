@@ -172,16 +172,35 @@ class EntryStrategy:
             pos.side == "short" and low <= pos.tp_price
         )
         if hit_tp:
-            return self._do_close(pos.tp_price, "tp")
+            return self._close_and_reopen(snapshot, pos.tp_price, "tp", pos.side, "tp_reopen")
 
         # ── SL ──
         hit_sl = (pos.side == "long" and low <= pos.sl_price) or (
             pos.side == "short" and high >= pos.sl_price
         )
         if hit_sl:
-            return self._do_close(pos.sl_price, "sl")
+            reverse_side = "short" if pos.side == "long" else "long"
+            return self._close_and_reopen(snapshot, pos.sl_price, "sl", reverse_side, "sl_reverse")
 
         return {"action": "hold", "side": pos.side, "pnl": 0.0, "reason": ""}
+
+    def _close_and_reopen(self, snapshot: MarketSnapshot, close_price: float,
+                          close_reason: str, next_side: str, open_reason: str) -> Dict:
+        """Закрывает позицию и сразу открывает следующую сделку."""
+        close_result = self._do_close(close_price, close_reason)
+
+        if self.position is not None or self.last_result == "NONE":
+            return close_result
+
+        open_result = self._open_in_direction(snapshot, next_side, open_reason)
+        return {
+            "action": f"{close_result['action']}_{open_result['action']}",
+            "side": open_result.get("side", close_result.get("side")),
+            "pnl": close_result.get("pnl", 0.0),
+            "reason": open_reason,
+            "close": close_result,
+            "open": open_result,
+        }
 
     def _do_close(self, price: float, reason: str) -> Dict:
         """Закрывает позицию и обновляет Win/Loss состояние."""
@@ -212,7 +231,7 @@ class EntryStrategy:
             self.last_result = "LOSS"
             self.loss_streak += 1
             self.win_streak = 0
-            self.pause_candles_left = 1  # Пауза 1 тик после убытка
+            self.pause_candles_left = 0 if reason == "sl" else 1
 
             # Серия 10+ убытков → полный сброс, снова ищем вход по индикаторам
             if self.loss_streak >= 10:
