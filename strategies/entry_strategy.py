@@ -172,6 +172,10 @@ class EntryStrategy:
             pos.side == "short" and low <= pos.tp_price
         )
         if hit_tp:
+            logger.info(
+                f"{self._tag} TP HIT | side={pos.side} low={low:.4f} high={high:.4f} "
+                f"tp={pos.tp_price:.4f} sl={pos.sl_price:.4f} next_side={pos.side}"
+            )
             return self._close_and_reopen(snapshot, pos.tp_price, "tp", pos.side, "tp_reopen")
 
         # ── SL ──
@@ -180,6 +184,10 @@ class EntryStrategy:
         )
         if hit_sl:
             reverse_side = "short" if pos.side == "long" else "long"
+            logger.info(
+                f"{self._tag} SL HIT | side={pos.side} low={low:.4f} high={high:.4f} "
+                f"tp={pos.tp_price:.4f} sl={pos.sl_price:.4f} next_side={reverse_side}"
+            )
             return self._close_and_reopen(snapshot, pos.sl_price, "sl", reverse_side, "sl_reverse")
 
         return {"action": "hold", "side": pos.side, "pnl": 0.0, "reason": ""}
@@ -187,12 +195,26 @@ class EntryStrategy:
     def _close_and_reopen(self, snapshot: MarketSnapshot, close_price: float,
                           close_reason: str, next_side: str, open_reason: str) -> Dict:
         """Закрывает позицию и сразу открывает следующую сделку."""
+        started_at = time.time()
+        logger.info(
+            f"{self._tag} FAST_CHAIN start | close_reason={close_reason} "
+            f"close_price={close_price:.4f} next_side={next_side} open_reason={open_reason}"
+        )
         close_result = self._do_close(close_price, close_reason)
 
         if self.position is not None or self.last_result == "NONE":
+            logger.info(
+                f"{self._tag} FAST_CHAIN stop_after_close | elapsed={time.time() - started_at:.3f}s "
+                f"position_exists={self.position is not None} last_result={self.last_result}"
+            )
             return close_result
 
         open_result = self._open_in_direction(snapshot, next_side, open_reason)
+        logger.info(
+            f"{self._tag} FAST_CHAIN done | elapsed={time.time() - started_at:.3f}s "
+            f"close_action={close_result.get('action')} open_action={open_result.get('action')} "
+            f"open_reason={open_result.get('reason')}"
+        )
         return {
             "action": f"{close_result['action']}_{open_result['action']}",
             "side": open_result.get("side", close_result.get("side")),
@@ -206,7 +228,16 @@ class EntryStrategy:
         """Закрывает позицию и обновляет Win/Loss состояние."""
         pos = self.position
         close_side = "sell" if pos.side == "long" else "buy"
+        order_started_at = time.time()
+        logger.info(
+            f"{self._tag} CLOSE_ORDER send | side={close_side} amount={pos.amount} "
+            f"reduce_only=True reason={reason}"
+        )
         order = self.exchange.place_market_order(close_side, pos.amount, reduce_only=True)
+        logger.info(
+            f"{self._tag} CLOSE_ORDER done | elapsed={time.time() - order_started_at:.3f}s "
+            f"order_ok={order is not None}"
+        )
         close_price, close_amount, close_fee = self._extract_order_fill(order or {}, price, pos.amount)
 
         # Расчёт PnL
@@ -358,7 +389,15 @@ class EntryStrategy:
             logger.warning(f"{self._tag} skip open | reason=insufficient_balance")
             return {"action": "none", "reason": "insufficient_balance", "pnl": 0.0}
 
+        order_started_at = time.time()
+        logger.info(
+            f"{self._tag} OPEN_ORDER send | side={direction} amount={amount} reason={reason}"
+        )
         order = self.exchange.place_market_order(direction, amount)
+        logger.info(
+            f"{self._tag} OPEN_ORDER done | elapsed={time.time() - order_started_at:.3f}s "
+            f"order_ok={order is not None} reason={reason}"
+        )
         if not order:
             logger.warning(f"{self._tag} skip open | reason=order_failed ({reason})")
             # Сбрасываем last_result — иначе следующий тик снова попытается открыть тот же ордер

@@ -95,6 +95,10 @@ class TrendStrategy:
         # ── Пауза при серии убытков ──
         if self.state.paused_until > time.time():
             result["reason"] = "pause_active"
+            logger.info(
+                f"{self._tag} skip | reason=pause_active "
+                f"remaining={self.state.paused_until - time.time():.1f}s"
+            )
             if self.notifier:
                 self.notifier.notify_trend_skip(self.user_id, "pause_active", snapshot.close, symbol=self.symbol)
             return result
@@ -171,8 +175,18 @@ class TrendStrategy:
         if (pos.side == "long" and high >= pos.tp_price) or (
             pos.side == "short" and low <= pos.tp_price
         ):
+            logger.info(
+                f"{self._tag} TP HIT | side={pos.side} low={low:.4f} high={high:.4f} "
+                f"tp={pos.tp_price:.4f} sl={pos.sl_price:.4f} next_side={pos.side}"
+            )
+            chain_started_at = time.time()
             pnl = self._close_position(pos.tp_price, "tp")
             open_result = self._open_position(pos.side, snapshot, "tp_reopen")
+            logger.info(
+                f"{self._tag} FAST_CHAIN done | elapsed={time.time() - chain_started_at:.3f}s "
+                f"close_reason=tp open_action={open_result.get('action')} "
+                f"open_reason={open_result.get('reason')}"
+            )
             result.update({
                 "action": f"close_tp_{open_result['action']}",
                 "pnl": pnl,
@@ -186,9 +200,14 @@ class TrendStrategy:
             if (pos.side == "long" and low <= pos.sl_price) or (
                 pos.side == "short" and high >= pos.sl_price
             ):
+                _rev_side = "short" if pos.side == "long" else "long"
+                logger.info(
+                    f"{self._tag} SL HIT | side={pos.side} low={low:.4f} high={high:.4f} "
+                    f"tp={pos.tp_price:.4f} sl={pos.sl_price:.4f} next_side={_rev_side}"
+                )
+                chain_started_at = time.time()
                 pnl = self._close_position(pos.sl_price, "sl")
                 result.update({"action": "close_sl", "pnl": pnl})
-                _rev_side = "short" if pos.side == "long" else "long"
                 result["reverse_signal"] = _rev_side
 
                 # Увеличиваем счётчик SL подряд
@@ -219,6 +238,10 @@ class TrendStrategy:
                         pass
                     if self.state.paused_until > time.time():
                         self.state.pending_reversal_side = _rev_side
+                        logger.info(
+                            f"{self._tag} FAST_CHAIN paused | elapsed={time.time() - chain_started_at:.3f}s "
+                            f"pending_side={_rev_side} remaining={self.state.paused_until - time.time():.1f}s"
+                        )
                     else:
                         open_result = self._open_position(_rev_side, snapshot, "sl_reverse")
                         result.update({
@@ -226,6 +249,11 @@ class TrendStrategy:
                             "reason": "sl_reverse",
                             "open": open_result,
                         })
+                        logger.info(
+                            f"{self._tag} FAST_CHAIN done | elapsed={time.time() - chain_started_at:.3f}s "
+                            f"close_reason=sl open_action={open_result.get('action')} "
+                            f"open_reason={open_result.get('reason')}"
+                        )
                     # Задержку свечей НЕ ставим — разворот должен быть мгновенным
 
                 return result
@@ -286,7 +314,15 @@ class TrendStrategy:
             return result
 
         # ── Открытие позиции ──
+        order_started_at = time.time()
+        logger.info(
+            f"{self._tag} OPEN_ORDER send | side={side} amount={amount} reason={reason}"
+        )
         order = self.exchange.place_market_order(side, amount)
+        logger.info(
+            f"{self._tag} OPEN_ORDER done | elapsed={time.time() - order_started_at:.3f}s "
+            f"order_ok={order is not None} reason={reason}"
+        )
 
         if not order:
             result["reason"] = "order_failed"
@@ -421,7 +457,16 @@ class TrendStrategy:
             return 0.0
 
         close_side = "sell" if pos.side == "long" else "buy"
+        order_started_at = time.time()
+        logger.info(
+            f"{self._tag} CLOSE_ORDER send | side={close_side} amount={pos.amount} "
+            f"reduce_only=True reason={reason}"
+        )
         order = self.exchange.place_market_order(close_side, pos.amount, reduce_only=True)
+        logger.info(
+            f"{self._tag} CLOSE_ORDER done | elapsed={time.time() - order_started_at:.3f}s "
+            f"order_ok={order is not None} reason={reason}"
+        )
         close_price, close_amount, close_fee = self._extract_order_fill(order or {}, price, pos.amount)
 
         # Расчёт PnL
