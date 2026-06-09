@@ -520,20 +520,34 @@ class ExchangeConnector:
         """
         balance = self.fetch_balance()
         usdt_free = balance["free"]
+        balance_base = usdt_free
+
+        custom_config = self.profile.custom_config or {}
+        virtual_balance = custom_config.get("virtual_balance_usdt")
+        if virtual_balance is not None:
+            try:
+                virtual_balance = float(virtual_balance)
+                if virtual_balance > 0:
+                    balance_base = min(usdt_free, virtual_balance)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"[{self.profile.user_id}] invalid virtual_balance_usdt={virtual_balance}"
+                )
 
         logger.info(
             f"[{self.profile.user_id}] calc_position_size | "
-            f"free={usdt_free} pct={pct_of_balance} leverage={self.profile.leverage} price={price}"
+            f"free={usdt_free} balance_base={balance_base} pct={pct_of_balance} "
+            f"leverage={self.profile.leverage} price={price}"
         )
 
-        if usdt_free <= 0 or price <= 0:
+        if balance_base <= 0 or price <= 0:
             logger.warning(
                 f"[{self.profile.user_id}] calc_position_size -> 0 "
-                f"(free={usdt_free}, price={price})"
+                f"(balance_base={balance_base}, price={price})"
             )
             return 0.0
 
-        usdt_amount = usdt_free * pct_of_balance * self.profile.leverage
+        usdt_amount = balance_base * pct_of_balance * self.profile.leverage
         contracts_raw = usdt_amount / price
 
         # Округляем по правилам биржи для данного символа (step size)
