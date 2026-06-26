@@ -115,6 +115,24 @@ HTML = """<!DOCTYPE html>
     font-weight:600; font-size:13px; opacity:0; transition:opacity .3s; }
   .toast-msg.show { opacity:1; } .toast-msg.err { background:var(--red); }
 
+  /* Auth modal */
+  .auth-modal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.58);
+    z-index:1200; align-items:center; justify-content:center; padding:18px; }
+  .auth-modal.open { display:flex; }
+  .auth-box { width:100%; max-width:360px; background:var(--card);
+    border:1px solid var(--border); border-radius:10px; padding:18px; }
+  .auth-title { font-size:16px; font-weight:700; margin-bottom:6px; }
+  .auth-hint { color:var(--muted); font-size:12px; margin-bottom:14px; }
+  .auth-input { width:100%; background:var(--bg); border:1px solid var(--border);
+    color:var(--text); border-radius:7px; padding:10px 12px; margin-bottom:10px;
+    outline:none; }
+  .auth-input:focus { border-color:var(--accent); }
+  .auth-actions { display:flex; gap:8px; margin-top:6px; }
+  .auth-btn { flex:1; border:none; border-radius:7px; padding:10px; font-weight:700;
+    cursor:pointer; }
+  .auth-submit { background:var(--accent); color:#fff; }
+  .auth-cancel { background:var(--border); color:var(--text); }
+
   /* Pair detail panel */
   #pair-detail { display:none; position:fixed; inset:0; background:var(--bg);
     z-index:500; flex-direction:column; overflow:hidden; }
@@ -170,6 +188,19 @@ HTML = """<!DOCTYPE html>
   </div>
 </div>
 <div class="toast-wrap"><div class="toast-msg" id="toast"></div></div>
+
+<div class="auth-modal" id="auth-modal">
+  <div class="auth-box">
+    <div class="auth-title">Доступ к настройкам</div>
+    <div class="auth-hint">Введите логин и пароль веб-интерфейса.</div>
+    <input class="auth-input" id="auth-user" autocomplete="username" value="admin" placeholder="Логин">
+    <input class="auth-input" id="auth-pass" type="password" autocomplete="current-password" placeholder="Пароль">
+    <div class="auth-actions">
+      <button class="auth-btn auth-cancel" onclick="cancelAuthDialog()">Отмена</button>
+      <button class="auth-btn auth-submit" onclick="submitAuthDialog()">Войти</button>
+    </div>
+  </div>
+</div>
 
 <!-- Pair cards -->
 <div id="pairs-section"></div>
@@ -290,6 +321,66 @@ const _savedSettings = {};  // Всегда зеркало последнего 
 let selectedPairs = [];
 let activePairs   = [];
 let pairsData     = [];
+let _authResolver = null;
+
+function getAuthHeader() {
+  var user = sessionStorage.getItem('webAuthUser') || '';
+  var pass = sessionStorage.getItem('webAuthPass') || '';
+  if (!user || !pass) return null;
+  return 'Basic ' + btoa(unescape(encodeURIComponent(user + ':' + pass)));
+}
+
+function showAuthDialog() {
+  return new Promise(function(resolve) {
+    _authResolver = resolve;
+    var modal = document.getElementById('auth-modal');
+    var user = document.getElementById('auth-user');
+    var pass = document.getElementById('auth-pass');
+    if (user) user.value = sessionStorage.getItem('webAuthUser') || 'admin';
+    if (pass) pass.value = '';
+    modal.classList.add('open');
+    setTimeout(function(){ if (pass) pass.focus(); }, 50);
+  });
+}
+
+function submitAuthDialog() {
+  var user = document.getElementById('auth-user').value || 'admin';
+  var pass = document.getElementById('auth-pass').value || '';
+  sessionStorage.setItem('webAuthUser', user);
+  sessionStorage.setItem('webAuthPass', pass);
+  document.getElementById('auth-modal').classList.remove('open');
+  if (_authResolver) _authResolver(true);
+  _authResolver = null;
+}
+
+function cancelAuthDialog() {
+  document.getElementById('auth-modal').classList.remove('open');
+  if (_authResolver) _authResolver(false);
+  _authResolver = null;
+}
+
+async function authFetch(url, options) {
+  options = options || {};
+  options.headers = Object.assign({}, options.headers || {});
+  var auth = getAuthHeader();
+  if (auth) options.headers.Authorization = auth;
+
+  var r = await fetch(url, options);
+  if (r.status !== 401) return r;
+
+  sessionStorage.removeItem('webAuthPass');
+  var ok = await showAuthDialog();
+  if (!ok) return r;
+
+  options.headers.Authorization = getAuthHeader();
+  return fetch(url, options);
+}
+
+document.addEventListener('keydown', function(e) {
+  if (!document.getElementById('auth-modal').classList.contains('open')) return;
+  if (e.key === 'Enter') submitAuthDialog();
+  if (e.key === 'Escape') cancelAuthDialog();
+});
 
 // ── Settings ──
 async function loadSettings() {
@@ -372,7 +463,7 @@ async function saveSettings() {
   var btn = document.getElementById('btn-save');
   btn.disabled = true; btn.textContent = 'Сохраняем...';
   try {
-    var r = await fetch('/api/settings', {
+    var r = await authFetch('/api/settings', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({settings:settings, pairs:selectedPairs}),
     });
@@ -380,7 +471,7 @@ async function saveSettings() {
     try { res = await r.json(); } catch(_) {}
     var lbl = selectedPairs.length ? selectedPairs.join(', ') : 'все пары';
     if (r.status === 401) {
-      showToast('Нужен логин/пароль: обнови страницу', true);
+      showToast('Неверный логин или пароль', true);
     } else if (r.status === 403 && res.error === 'web_password_required') {
       showToast('Нужен WEB_PASSWORD и перезапуск бота', true);
     } else if (res.ok) {
@@ -576,7 +667,12 @@ async function botControl(action) {
   var dot      = document.getElementById('status-dot');
   stopBtn.disabled = true; startBtn.disabled = true;
   try {
-    var r = await fetch('/api/bot/' + action, {method:'POST'});
+    var r = await authFetch('/api/bot/' + action, {method:'POST'});
+    if (r.status === 401) {
+      showToast('Неверный логин или пароль', true);
+      stopBtn.disabled = false; startBtn.disabled = false;
+      return;
+    }
     var d = await r.json();
     if (d.ok) {
       _botPaused = (action === 'stop');
@@ -617,7 +713,11 @@ async function fetchBotState() {
 async function sosAction() {
   if (!confirm('⚠ ПРИНУДИТЕЛЬНОЕ ЗАКРЫТИЕ ВСЕХ ПОЗИЦИЙ\\n\\nБот закроет все открытые позиции по рынку на следующем тике.\\n\\nПродолжить?')) return;
   try {
-    var r = await fetch('/api/sos', {method:'POST'});
+    var r = await authFetch('/api/sos', {method:'POST'});
+    if (r.status === 401) {
+      showToast('Неверный логин или пароль', true);
+      return;
+    }
     var d = await r.json();
     if (d.ok) showToast('SOS отправлен — позиции будут закрыты', false);
     else      showToast('Ошибка SOS: ' + (d.error||''), true);
@@ -921,11 +1021,11 @@ def create_app():
         password = os.environ.get("WEB_PASSWORD", "")
         user = os.environ.get("WEB_USER", "admin")
 
-        # Без WEB_PASSWORD оставляем внешний просмотр, но блокируем любые действия,
-        # которые меняют состояние бота или настройки.
+        # Внешний просмотр открыт, изменения настроек/состояния требуют пароль.
+        if _is_local_request() or request.method in ("GET", "HEAD", "OPTIONS"):
+            return None
+
         if not password:
-            if _is_local_request() or request.method in ("GET", "HEAD", "OPTIONS"):
-                return None
             logger.warning(f"[WebApp] blocked unauthenticated external request from {request.remote_addr}")
             return jsonify({"ok": False, "error": "web_password_required"}), 403
 
