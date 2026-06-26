@@ -20,6 +20,7 @@ class ExchangeConnector:
 
     def __init__(self, profile: UserProfile):
         self.profile = profile
+        self._last_positions_fetch_ok = False
         self.exchange, self.public_exchange = self._init_exchange()
         self._set_leverage()
 
@@ -251,9 +252,36 @@ class ExchangeConnector:
     def fetch_positions(self) -> List[Dict]:
         """Открытые позиции"""
         try:
+            if self.profile.exchange.lower() == "bybit":
+                symbol_id = self.profile.symbol.replace("/", "")
+                resp = self.exchange.privateGetV5PositionList({
+                    "category": "linear",
+                    "symbol": symbol_id,
+                })
+                raw_positions = (resp.get("result") or {}).get("list") or []
+                positions = []
+                for item in raw_positions:
+                    contracts = float(item.get("size") or 0)
+                    if contracts == 0:
+                        continue
+                    side_raw = (item.get("side") or "").lower()
+                    side = "long" if side_raw == "buy" else "short" if side_raw == "sell" else side_raw
+                    positions.append({
+                        "symbol": self.profile.symbol,
+                        "side": side,
+                        "contracts": contracts,
+                        "entryPrice": float(item.get("avgPrice") or 0),
+                        "unrealizedPnl": float(item.get("unrealisedPnl") or 0),
+                        "info": item,
+                    })
+                self._last_positions_fetch_ok = True
+                return positions
+
             positions = self.exchange.fetch_positions([self.profile.symbol])
+            self._last_positions_fetch_ok = True
             return [p for p in positions if float(p.get("contracts", 0)) != 0]
         except Exception as e:
+            self._last_positions_fetch_ok = False
             logger.error(f"fetch_positions error: {e}")
             return []
 

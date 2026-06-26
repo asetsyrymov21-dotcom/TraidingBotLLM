@@ -268,6 +268,8 @@ class BotEngine:
 
         result["mode"] = self._current_mode
 
+        self._sync_internal_position_with_exchange()
+
         # ── 4. Тик стратегий ──
         # На одной паре допускаем только одну активную стратегию. Если Trend уже
         # держит позицию, сначала сопровождаем её и не даём Entry открыть вторую.
@@ -399,6 +401,30 @@ class BotEngine:
             self.trend_bot.state.position is not None or
             self.entry_bot.position is not None
         )
+
+    def _sync_internal_position_with_exchange(self):
+        """Сбрасывает внутреннюю позицию, если на бирже её уже нет."""
+        internal_position = self.trend_bot.state.position or self.entry_bot.position
+        if not internal_position:
+            return
+
+        positions = self.exchange.fetch_positions()
+        if not getattr(self.exchange, "_last_positions_fetch_ok", False):
+            logger.warning(
+                f"[BOT:{self._log_label}] position sync skipped: exchange position fetch failed"
+            )
+            return
+
+        if positions:
+            return
+
+        logger.warning(
+            f"[BOT:{self._log_label}] position desync detected: internal "
+            f"{internal_position.side} position exists, exchange has no open position. "
+            f"Resetting internal strategy position."
+        )
+        self.trend_bot.state.position = None
+        self.entry_bot.position = None
 
     def _emergency_close(self):
         """Экстренное закрытие всех позиций"""
