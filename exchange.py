@@ -20,6 +20,7 @@ class ExchangeConnector:
 
     def __init__(self, profile: UserProfile):
         self.profile = profile
+        self._market_symbol = profile.symbol
         self._last_positions_fetch_ok = False
         self.exchange, self.public_exchange = self._init_exchange()
         self._set_leverage()
@@ -95,6 +96,7 @@ class ExchangeConnector:
                     "enableRateLimit": True,
                     "options": {
                         "defaultType": "linear",
+                        "defaultSubType": "linear",
                         "adjustForTimeDifference": True,
                     },
                 }
@@ -110,6 +112,7 @@ class ExchangeConnector:
                 logger.info(f"[{self.profile.user_id}] Bybit Demo Trading mode enabled (api-demo.bybit.com)")
 
             exchange.load_markets()
+            self._market_symbol = self._resolve_bybit_linear_symbol(exchange)
             logger.info(f"[{self.profile.user_id}] Connected to {name.upper()}")
 
             # Определяем и переключаем position mode на One-Way (0).
@@ -149,6 +152,40 @@ class ExchangeConnector:
         else:
             raise ValueError(f"Unsupported exchange: {name}. Use 'binance' or 'bybit'.")
 
+    def _bybit_linear_params(self, params: Optional[Dict] = None) -> Dict:
+        """Всегда направляет Bybit-запросы в USDT linear derivatives, а не spot."""
+        merged = dict(params or {})
+        if self.profile.exchange.lower() == "bybit":
+            merged["category"] = "linear"
+        return merged
+
+    def _resolve_bybit_linear_symbol(self, exchange) -> str:
+        if self.profile.exchange.lower() != "bybit":
+            return self.profile.symbol
+
+        requested = self.profile.symbol
+        candidates = [requested]
+        if ":" not in requested and requested.endswith("/USDT"):
+            candidates.append(f"{requested}:USDT")
+
+        for candidate in candidates:
+            market = exchange.markets.get(candidate)
+            if market and (market.get("linear") or market.get("swap")):
+                if candidate != requested:
+                    logger.info(
+                        f"[{self.profile.user_id}] Bybit linear symbol resolved: "
+                        f"{requested} -> {candidate}"
+                    )
+                return candidate
+
+        market = exchange.markets.get(requested) or exchange.market(requested)
+        if not (market.get("linear") or market.get("swap")):
+            raise ValueError(
+                f"Bybit market {requested} is not linear/swap "
+                f"(ccxt type={market.get('type')}). Refusing to trade spot."
+            )
+        return requested
+
     def _set_leverage(self):
         logger.info(f"[{self.profile.user_id}] Skip leverage setup temporarily")
         return
@@ -157,7 +194,7 @@ class ExchangeConnector:
         """Устанавливает плечо для текущего символа на бирже."""
         try:
             leverage = max(1, min(125, int(leverage)))
-            symbol = self.profile.symbol
+            symbol = self._market_symbol
             if self.profile.exchange.lower() == "binance":
                 binance_symbol = symbol.replace("/", "")
                 self.exchange.fapiPrivatePostLeverage({
@@ -183,7 +220,7 @@ class ExchangeConnector:
         for attempt in range(3):
             try:
                 ohlcv = self.public_exchange.fetch_ohlcv(
-                    self.profile.symbol,
+                    self._market_symbol,
                     timeframe=timeframe,
                     limit=limit,
                 )
@@ -198,7 +235,7 @@ class ExchangeConnector:
 
     def fetch_ticker(self) -> Dict:
         """Текущая цена и объём"""
-        return self.public_exchange.fetch_ticker(self.profile.symbol)
+        return self.public_exchange.fetch_ticker(self._market_symbol)
 
     def fetch_balance(self) -> Dict:
         """Баланс аккаунта"""
@@ -253,7 +290,7 @@ class ExchangeConnector:
         """Открытые позиции"""
         try:
             if self.profile.exchange.lower() == "bybit":
-                symbol_id = self.profile.symbol.replace("/", "")
+                symbol_id = self.exchange.market(self._market_symbol)["id"]
                 resp = self.exchange.privateGetV5PositionList({
                     "category": "linear",
                     "symbol": symbol_id,
@@ -277,7 +314,7 @@ class ExchangeConnector:
                 self._last_positions_fetch_ok = True
                 return positions
 
-            positions = self.exchange.fetch_positions([self.profile.symbol])
+            positions = self.exchange.fetch_positions([self._market_symbol])
             self._last_positions_fetch_ok = True
             return [p for p in positions if float(p.get("contracts", 0)) != 0]
         except Exception as e:
@@ -288,7 +325,10 @@ class ExchangeConnector:
     def fetch_open_orders(self) -> List[Dict]:
         """Открытые ордера"""
         try:
-            return self.exchange.fetch_open_orders(self.profile.symbol)
+            return self.exchange.fetch_open_orders(
+                self._market_symbol,
+                params=self._bybit_linear_params(),
+            )
         except Exception as e:
             logger.error(f"fetch_open_orders error: {e}")
             return []
@@ -364,7 +404,7 @@ class ExchangeConnector:
                 )
                 return order
 
-            params = {}
+            params = self._bybit_linear_params()
             if reduce_only:
                 params["reduceOnly"] = True
 
@@ -383,7 +423,7 @@ class ExchangeConnector:
                     params["positionIdx"] = 0
 
             order = self.exchange.create_order(
-                symbol=self.profile.symbol,
+                symbol=self._market_symbol,
                 type="market",
                 side=side,
                 amount=amount,
@@ -422,7 +462,11 @@ class ExchangeConnector:
 
         try:
             time.sleep(0.3)
-            fetched = self.exchange.fetch_order(order_id, self.profile.symbol)
+            fetched = self.exchange.fetch_order(
+                order_id,
+                self._market_symbol,
+                params=self._bybit_linear_params(),
+            )
             for key in ("average", "filled", "fee", "fees", "cost", "price"):
                 if fetched.get(key) not in (None, "", 0):
                     enriched[key] = fetched.get(key)
@@ -434,7 +478,12 @@ class ExchangeConnector:
             logger.debug(f"fetch_order enrich failed for {order_id}: {e}")
 
         try:
-            trades = self.exchange.fetch_my_trades(self.profile.symbol, None, 20, {"orderId": order_id})
+            trades = self.exchange.fetch_my_trades(
+                self._market_symbol,
+                None,
+                20,
+                self._bybit_linear_params({"orderId": order_id}),
+            )
             if trades:
                 filled = sum(float(t.get("amount") or 0) for t in trades)
                 cost = sum(float(t.get("cost") or 0) for t in trades)
@@ -477,12 +526,12 @@ class ExchangeConnector:
             elif side == "short":
                 side = "sell"
 
-            params = {}
+            params = self._bybit_linear_params()
             if reduce_only:
                 params["reduceOnly"] = True
 
             order = self.exchange.create_order(
-                symbol=self.profile.symbol,
+                symbol=self._market_symbol,
                 type="limit",
                 side=side,
                 amount=amount,
@@ -501,7 +550,11 @@ class ExchangeConnector:
     def cancel_order(self, order_id: str) -> bool:
         """Отмена ордера"""
         try:
-            self.exchange.cancel_order(order_id, self.profile.symbol)
+            self.exchange.cancel_order(
+                order_id,
+                self._market_symbol,
+                params=self._bybit_linear_params(),
+            )
             logger.info(f"[{self.profile.user_id}] Cancelled order {order_id}")
             return True
         except Exception as e:
@@ -582,7 +635,7 @@ class ExchangeConnector:
         # Это предотвращает ошибку -1111 "Precision is over the maximum defined"
         try:
             contracts_str = self.public_exchange.amount_to_precision(
-                self.profile.symbol, contracts_raw
+                self._market_symbol, contracts_raw
             )
             contracts = float(contracts_str)
         except Exception:
