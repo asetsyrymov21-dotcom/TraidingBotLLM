@@ -144,8 +144,9 @@ class ExchangeConnector:
                     logger.info(f"[{self.profile.user_id}] Bybit: One-Way mode confirmed")
             except Exception as e:
                 logger.warning(f"[{self.profile.user_id}] Bybit: could not detect position mode: {e}")
-                # На всякий случай используем positionIdx (безопасный дефолт)
-                self._bybit_hedge_mode = True
+                # Без подтверждения Hedge Mode остаёмся в One-Way.
+                # Иначе Bybit One-Way отклоняет ордер: "position idx not match position mode".
+                self._bybit_hedge_mode = False
 
             return exchange, exchange
 
