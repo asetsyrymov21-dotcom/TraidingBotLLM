@@ -438,7 +438,7 @@ function renderTradePairs() {
   });
   grid.innerHTML = all.map(function(sym){
     var active = tradePairsSelected.includes(sym);
-    return '<button class="trade-pair-btn'+(active?' active':'')+'" onclick="toggleTradePair(\''+sym+'\')">'+
+    return '<button class="trade-pair-btn'+(active?' active':'')+'" onclick="toggleTradePair(&quot;'+sym+'&quot;)">'+
       sym.replace('/USDT','')+
     '</button>';
   }).join('');
