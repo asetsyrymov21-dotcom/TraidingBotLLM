@@ -4,6 +4,7 @@
 # ============================================================
 
 import logging
+import json
 import os
 import signal
 import sys
@@ -183,6 +184,8 @@ class MultiUserRunner:
         self.contexts: Dict[str, UserContext] = {}
         self._stop_event = threading.Event()
         self._global_tick: int = 0
+        self._users_file = os.path.join("data", "users.json")
+        self._users_mtime: float = 0.0
         # Время последней отправки сводки (per user), unix timestamp
         self._last_summary_time: Dict[str, float] = {}
         self._summary_interval_sec: int = 30 * 60  # 30 минут
@@ -203,6 +206,61 @@ class MultiUserRunner:
             f"(top_n={profile.top_n_symbols}, "
             f"deposit_pct={profile.deposit_pct:.0%})"
         )
+
+    def _reload_manual_pair_settings(self):
+        """Подхватывает изменения списка пар из users.json без перезапуска."""
+        try:
+            mtime = os.path.getmtime(self._users_file)
+        except OSError:
+            return
+
+        if mtime <= self._users_mtime:
+            return
+        self._users_mtime = mtime
+
+        try:
+            with open(self._users_file, encoding="utf-8") as f:
+                users = json.load(f)
+        except Exception as e:
+            logger.warning(f"Не удалось перечитать users.json: {e}")
+            return
+
+        for uid, ctx in self.contexts.items():
+            data = users.get(uid)
+            if not data:
+                continue
+
+            new_symbol = data.get("symbol", ctx.profile.symbol)
+            new_symbols = list(data.get("symbols", ctx.profile.symbols or []))
+            new_top_n = int(data.get("top_n_symbols", ctx.profile.top_n_symbols) or 0)
+            changed = (
+                new_symbol != ctx.profile.symbol or
+                new_symbols != (ctx.profile.symbols or []) or
+                new_top_n != ctx.profile.top_n_symbols
+            )
+            if not changed:
+                continue
+
+            logger.info(
+                f"[{uid}] Обновляем пары из users.json: "
+                f"symbol={new_symbol}, symbols={new_symbols}, top_n={new_top_n}"
+            )
+            ctx.profile.symbol = new_symbol
+            ctx.profile.symbols = new_symbols
+            ctx.profile.top_n_symbols = new_top_n
+
+            if new_top_n > 0 and ctx.scanner is None:
+                ctx.scanner = SymbolScanner(
+                    exchange_name=ctx.profile.exchange,
+                    api_key=ctx.profile.api_key,
+                    api_secret=ctx.profile.api_secret,
+                    is_testnet=ctx.profile.is_testnet,
+                    top_n=new_top_n,
+                )
+            elif new_top_n == 0:
+                ctx.scanner = None
+
+            ctx.sync_engines()
 
     def run(self, interval_seconds: int = 60):
         if not self.contexts:
@@ -236,6 +294,8 @@ class MultiUserRunner:
             self._global_tick += 1
 
             for uid, ctx in list(self.contexts.items()):
+                self._reload_manual_pair_settings()
+
                 # Проверяем, нужно ли обновить список пар (каждые 24ч)
                 if ctx.scanner and ctx.scanner.should_refresh():
                     logger.info(f"[{uid}] Обновляем список пар (прошло 24ч)...")

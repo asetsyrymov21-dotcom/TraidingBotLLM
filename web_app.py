@@ -16,6 +16,8 @@ import dynamic_settings
 
 logger = logging.getLogger(__name__)
 STATUS_DIR = os.path.join("data", "status")
+USERS_FILE = os.path.join("data", "users.json")
+DEFAULT_TRADE_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 
 HTML = """<!DOCTYPE html>
 <html lang="ru">
@@ -99,6 +101,16 @@ HTML = """<!DOCTYPE html>
     border-radius:6px; padding:4px 10px; font-size:12px; font-weight:600;
     cursor:pointer; transition:background .15s,color .15s; }
   .pair-btn.active, .period-btn.active { background:var(--accent); color:#fff; }
+  .trade-pair-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .trade-pair-btn { background:var(--bg); color:var(--muted); border:1px solid var(--border);
+    border-radius:7px; padding:10px 8px; font-size:13px; font-weight:700; cursor:pointer; }
+  .trade-pair-btn.active { background:rgba(63,185,80,.14); color:var(--green); border-color:rgba(63,185,80,.55); }
+  .pair-add-row { display:flex; gap:8px; margin-top:10px; }
+  .pair-text-input { flex:1; min-width:0; background:var(--bg); border:1px solid var(--border);
+    color:var(--text); border-radius:7px; padding:9px 10px; outline:none; }
+  .pair-text-input:focus { border-color:var(--accent); }
+  .pair-add-btn { background:var(--border); color:var(--text); border:none; border-radius:7px;
+    padding:9px 12px; font-size:12px; font-weight:700; cursor:pointer; }
 
   /* Save bar */
   .save-bar { position:fixed; bottom:0; left:0; right:0; background:var(--card);
@@ -221,6 +233,22 @@ HTML = """<!DOCTYPE html>
   </div>
 </div>
 
+<!-- Active trading pairs -->
+<div class="section">
+  <div class="section-header">
+    <span>АКТИВНЫЕ ПАРЫ</span>
+    <span id="trade-pairs-count" style="font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0">--</span>
+  </div>
+  <div class="setting-row">
+    <div class="trade-pair-grid" id="trade-pairs-grid"></div>
+    <div class="pair-add-row">
+      <input class="pair-text-input" id="pair-custom-input" placeholder="Например XRP/USDT">
+      <button class="pair-add-btn" onclick="addCustomTradePair()">Добавить</button>
+    </div>
+    <div class="setting-hint">Список применяется на следующем тике. Отключённая пара перестаёт получать новый движок.</div>
+  </div>
+</div>
+
 <!-- Settings -->
 <div class="section">
   <div class="section-header">
@@ -321,6 +349,8 @@ const _savedSettings = {};  // Всегда зеркало последнего 
 let selectedPairs = [];
 let activePairs   = [];
 let pairsData     = [];
+let tradePairsAvailable = [];
+let tradePairsSelected = [];
 let _authResolver = null;
 
 function getAuthHeader() {
@@ -392,6 +422,93 @@ async function loadSettings() {
     applySettingsToUI(d);
     updateSaveLabel();
   } catch(e) { console.error(e); }
+}
+
+async function loadTradePairs() {
+  try {
+    var r = await fetch('/api/user/pairs');
+    var d = await r.json();
+    if (!d.ok) return;
+    tradePairsAvailable = d.available || [];
+    tradePairsSelected = d.active || [];
+    renderTradePairs();
+  } catch(e) { console.error(e); }
+}
+
+function normalizePair(raw) {
+  var s = (raw || '').trim().toUpperCase().replace('-', '/').replace('_', '/');
+  if (!s) return '';
+  if (s.indexOf('/') < 0 && s.endsWith('USDT')) {
+    s = s.slice(0, -4) + '/USDT';
+  }
+  if (s.indexOf('/') < 0) s = s + '/USDT';
+  return /^[A-Z0-9]+\/USDT$/.test(s) ? s : '';
+}
+
+function renderTradePairs() {
+  var grid = document.getElementById('trade-pairs-grid');
+  var count = document.getElementById('trade-pairs-count');
+  if (!grid) return;
+  var all = tradePairsAvailable.slice();
+  tradePairsSelected.forEach(function(sym){
+    if (!all.includes(sym)) all.push(sym);
+  });
+  grid.innerHTML = all.map(function(sym){
+    var active = tradePairsSelected.includes(sym);
+    return '<button class="trade-pair-btn'+(active?' active':'')+'" onclick="toggleTradePair(\''+sym+'\')">'+
+      sym.replace('/USDT','')+
+    '</button>';
+  }).join('');
+  if (count) count.textContent = tradePairsSelected.length + ' включено';
+}
+
+async function toggleTradePair(sym) {
+  if (tradePairsSelected.includes(sym)) {
+    tradePairsSelected = tradePairsSelected.filter(function(s){ return s !== sym; });
+  } else {
+    tradePairsSelected.push(sym);
+  }
+  await saveTradePairs();
+}
+
+async function addCustomTradePair() {
+  var input = document.getElementById('pair-custom-input');
+  var sym = normalizePair(input ? input.value : '');
+  if (!sym || !sym.endsWith('/USDT')) {
+    showToast('Нужна пара к USDT', true);
+    return;
+  }
+  if (!tradePairsAvailable.includes(sym)) tradePairsAvailable.push(sym);
+  if (!tradePairsSelected.includes(sym)) tradePairsSelected.push(sym);
+  if (input) input.value = '';
+  await saveTradePairs();
+}
+
+async function saveTradePairs() {
+  if (tradePairsSelected.length < 1) {
+    showToast('Оставь хотя бы одну пару', true);
+    await loadTradePairs();
+    return;
+  }
+  try {
+    var r = await authFetch('/api/user/pairs', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({symbols: tradePairsSelected}),
+    });
+    var d = {};
+    try { d = await r.json(); } catch(_) {}
+    if (r.status === 401) {
+      showToast('Неверный логин или пароль', true);
+    } else if (d.ok) {
+      tradePairsSelected = d.active || tradePairsSelected;
+      tradePairsAvailable = d.available || tradePairsAvailable;
+      renderTradePairs();
+      showToast('Пары обновлены', false);
+      setTimeout(loadStatus, 1200);
+    } else {
+      showToast('Ошибка: '+(d.error||''), true);
+    }
+  } catch(e) { showToast('Ошибка: '+e.message, true); }
 }
 
 function applySettingsToUI(data) {
@@ -914,7 +1031,7 @@ function showToast(msg, isError) {
 }
 
 // ── Init ──
-loadSettings(); loadStatus(); loadChart(7); fetchBotState();
+loadSettings(); loadTradePairs(); loadStatus(); loadChart(7); fetchBotState();
 setInterval(loadStatus, 10000);
 setInterval(fetchBotState, 15000);
 </script>
@@ -943,14 +1060,43 @@ def _read_status_files():
 
 def _get_first_user():
     """Читает первого пользователя из users.json."""
-    users_file = os.path.join("data", "users.json")
-    if not os.path.exists(users_file):
+    if not os.path.exists(USERS_FILE):
         return None
-    with open(users_file, encoding="utf-8") as f:
+    with open(USERS_FILE, encoding="utf-8") as f:
         users = json.load(f)
     if not users:
         return None
     return next(iter(users.values()))
+
+
+def _load_users():
+    if not os.path.exists(USERS_FILE):
+        return {}
+    with open(USERS_FILE, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _normalize_symbol(sym):
+    s = str(sym or "").strip().upper().replace("-", "/").replace("_", "/")
+    if not s:
+        return ""
+    if "/" not in s and s.endswith("USDT"):
+        s = s[:-4] + "/USDT"
+    if "/" not in s:
+        s = s + "/USDT"
+    if "/" not in s:
+        return ""
+    base, quote = s.split("/", 1)
+    if quote != "USDT" or not base or not base.isalnum():
+        return ""
+    return s
+
+
+def _active_symbols_for_user(user):
+    symbols = user.get("symbols") or []
+    if symbols:
+        return [_normalize_symbol(s) for s in symbols if _normalize_symbol(s)]
+    return [_normalize_symbol(user.get("symbol", "ETH/USDT"))]
 
 
 def _notify_settings_changed(old: dict, new: dict, pairs: list):
@@ -1105,6 +1251,76 @@ def create_app():
                     logger.warning(f"[WebApp] TG notify failed: {_tg_err}", exc_info=True)
 
             return jsonify({"ok": saved})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+
+    @app.route("/api/user/pairs", methods=["GET"])
+    def api_user_pairs_get():
+        try:
+            users = _load_users()
+            if not users:
+                return jsonify({"ok": False, "error": "no users"}), 404
+            uid, user = next(iter(users.items()))
+            active = _active_symbols_for_user(user)
+            available = list(DEFAULT_TRADE_PAIRS)
+            for sym in active:
+                if sym not in available:
+                    available.append(sym)
+            return jsonify({
+                "ok": True,
+                "user_id": uid,
+                "active": active,
+                "available": available,
+            })
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+
+    @app.route("/api/user/pairs", methods=["POST"])
+    def api_user_pairs_post():
+        try:
+            body = request.get_json(force=True)
+            requested = body.get("symbols", [])
+            symbols = []
+            for raw in requested:
+                sym = _normalize_symbol(raw)
+                if not sym:
+                    continue
+                if not sym.endswith("/USDT"):
+                    return jsonify({"ok": False, "error": f"{sym}: only USDT pairs are allowed"}), 400
+                if sym not in symbols:
+                    symbols.append(sym)
+
+            if not symbols:
+                return jsonify({"ok": False, "error": "at least one pair required"}), 400
+
+            users = _load_users()
+            if not users:
+                return jsonify({"ok": False, "error": "no users"}), 404
+
+            uid, user = next(iter(users.items()))
+            old = _active_symbols_for_user(user)
+            user["symbol"] = symbols[0]
+            user["symbols"] = symbols
+            user["top_n_symbols"] = 0
+
+            os.makedirs("data", exist_ok=True)
+            with open(USERS_FILE, "w", encoding="utf-8") as f:
+                json.dump(users, f, indent=2, ensure_ascii=False)
+
+            available = list(DEFAULT_TRADE_PAIRS)
+            for sym in symbols:
+                if sym not in available:
+                    available.append(sym)
+
+            _audit_web_action("pairs_save", {
+                "ip": request.headers.get("X-Forwarded-For", request.remote_addr),
+                "user_agent": request.headers.get("User-Agent", ""),
+                "user_id": uid,
+                "old": old,
+                "new": symbols,
+            })
+            logger.info(f"[WebApp] Active pairs updated for {uid}: {symbols}")
+            return jsonify({"ok": True, "active": symbols, "available": available})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 400
 
