@@ -442,7 +442,7 @@ function normalizePair(raw) {
     s = s.slice(0, -4) + '/USDT';
   }
   if (s.indexOf('/') < 0) s = s + '/USDT';
-  return /^[A-Z0-9]+\/USDT$/.test(s) ? s : '';
+  return /^[A-Z0-9]+[/]USDT$/.test(s) ? s : '';
 }
 
 function renderTradePairs() {
