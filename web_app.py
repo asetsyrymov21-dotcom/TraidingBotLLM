@@ -105,12 +105,6 @@ HTML = """<!DOCTYPE html>
   .trade-pair-btn { background:var(--bg); color:var(--muted); border:1px solid var(--border);
     border-radius:7px; padding:10px 8px; font-size:13px; font-weight:700; cursor:pointer; }
   .trade-pair-btn.active { background:rgba(63,185,80,.14); color:var(--green); border-color:rgba(63,185,80,.55); }
-  .pair-add-row { display:flex; gap:8px; margin-top:10px; }
-  .pair-text-input { flex:1; min-width:0; background:var(--bg); border:1px solid var(--border);
-    color:var(--text); border-radius:7px; padding:9px 10px; outline:none; }
-  .pair-text-input:focus { border-color:var(--accent); }
-  .pair-add-btn { background:var(--border); color:var(--text); border:none; border-radius:7px;
-    padding:9px 12px; font-size:12px; font-weight:700; cursor:pointer; }
 
   /* Save bar */
   .save-bar { position:fixed; bottom:0; left:0; right:0; background:var(--card);
@@ -241,11 +235,7 @@ HTML = """<!DOCTYPE html>
   </div>
   <div class="setting-row">
     <div class="trade-pair-grid" id="trade-pairs-grid"></div>
-    <div class="pair-add-row">
-      <input class="pair-text-input" id="pair-custom-input" placeholder="Например XRP/USDT">
-      <button class="pair-add-btn" onclick="addCustomTradePair()">Добавить</button>
-    </div>
-    <div class="setting-hint">Список применяется на следующем тике. Отключённая пара перестаёт получать новый движок.</div>
+    <div class="setting-hint">Нажми пару, чтобы включить или отключить её. Список применяется на следующем тике.</div>
   </div>
 </div>
 
@@ -349,7 +339,7 @@ const _savedSettings = {};  // Всегда зеркало последнего 
 let selectedPairs = [];
 let activePairs   = [];
 let pairsData     = [];
-let tradePairsAvailable = [];
+let tradePairsAvailable = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'];
 let tradePairsSelected = [];
 let _authResolver = null;
 
@@ -432,17 +422,10 @@ async function loadTradePairs() {
     tradePairsAvailable = d.available || [];
     tradePairsSelected = d.active || [];
     renderTradePairs();
-  } catch(e) { console.error(e); }
-}
-
-function normalizePair(raw) {
-  var s = (raw || '').trim().toUpperCase().replace('-', '/').replace('_', '/');
-  if (!s) return '';
-  if (s.indexOf('/') < 0 && s.endsWith('USDT')) {
-    s = s.slice(0, -4) + '/USDT';
+  } catch(e) {
+    console.error(e);
+    renderTradePairs();
   }
-  if (s.indexOf('/') < 0) s = s + '/USDT';
-  return /^[A-Z0-9]+[/]USDT$/.test(s) ? s : '';
 }
 
 function renderTradePairs() {
@@ -468,19 +451,6 @@ async function toggleTradePair(sym) {
   } else {
     tradePairsSelected.push(sym);
   }
-  await saveTradePairs();
-}
-
-async function addCustomTradePair() {
-  var input = document.getElementById('pair-custom-input');
-  var sym = normalizePair(input ? input.value : '');
-  if (!sym || !sym.endsWith('/USDT')) {
-    showToast('Нужна пара к USDT', true);
-    return;
-  }
-  if (!tradePairsAvailable.includes(sym)) tradePairsAvailable.push(sym);
-  if (!tradePairsSelected.includes(sym)) tradePairsSelected.push(sym);
-  if (input) input.value = '';
   await saveTradePairs();
 }
 
@@ -1099,6 +1069,11 @@ def _active_symbols_for_user(user):
     return [_normalize_symbol(user.get("symbol", "ETH/USDT"))]
 
 
+def _allowed_active_symbols(user):
+    active = [s for s in _active_symbols_for_user(user) if s in DEFAULT_TRADE_PAIRS]
+    return active or ["ETH/USDT"]
+
+
 def _notify_settings_changed(old: dict, new: dict, pairs: list):
     """Отправляет TG-уведомление об изменении настроек (читает токен из env)."""
     try:
@@ -1261,11 +1236,8 @@ def create_app():
             if not users:
                 return jsonify({"ok": False, "error": "no users"}), 404
             uid, user = next(iter(users.items()))
-            active = _active_symbols_for_user(user)
+            active = _allowed_active_symbols(user)
             available = list(DEFAULT_TRADE_PAIRS)
-            for sym in active:
-                if sym not in available:
-                    available.append(sym)
             return jsonify({
                 "ok": True,
                 "user_id": uid,
@@ -1285,8 +1257,8 @@ def create_app():
                 sym = _normalize_symbol(raw)
                 if not sym:
                     continue
-                if not sym.endswith("/USDT"):
-                    return jsonify({"ok": False, "error": f"{sym}: only USDT pairs are allowed"}), 400
+                if sym not in DEFAULT_TRADE_PAIRS:
+                    return jsonify({"ok": False, "error": f"{sym}: pair is not available"}), 400
                 if sym not in symbols:
                     symbols.append(sym)
 
@@ -1308,9 +1280,6 @@ def create_app():
                 json.dump(users, f, indent=2, ensure_ascii=False)
 
             available = list(DEFAULT_TRADE_PAIRS)
-            for sym in symbols:
-                if sym not in available:
-                    available.append(sym)
 
             _audit_web_action("pairs_save", {
                 "ip": request.headers.get("X-Forwarded-For", request.remote_addr),
