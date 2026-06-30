@@ -162,9 +162,37 @@ class UserContext:
                 logger.error(f"[{self.user_id}:{sym}] Ошибка тика: {e}", exc_info=True)
                 results[sym] = {"status": "error", "message": str(e)}
             if self.notifier:
+                self._update_total_session_info()
                 self.notifier.flush_batch()
 
         return results
+
+    def _update_total_session_info(self):
+        """Обновляет общий PnL пользователя по всем активным парам."""
+        if not self.notifier:
+            return
+
+        total_pnl = 0.0
+        total_in_trade = 0.0
+
+        for engine in self.engines.values():
+            total_pnl += (
+                engine.entry_bot.total_pnl +
+                engine.trend_bot.state.total_pnl
+            )
+
+            if engine.entry_bot.position:
+                total_in_trade += (
+                    engine.entry_bot.position.amount *
+                    engine.entry_bot.position.entry_price
+                )
+            elif engine.trend_bot.state.position:
+                total_in_trade += (
+                    engine.trend_bot.state.position.amount *
+                    engine.trend_bot.state.position.entry_price
+                )
+
+        self.notifier.update_session_info(total_pnl, total_in_trade)
 
 
 # ──────────────────────────────────────────
