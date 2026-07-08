@@ -22,6 +22,9 @@ class ExchangeConnector:
         self.profile = profile
         self._market_symbol = profile.symbol
         self._last_positions_fetch_ok = False
+        self.paper_trading = bool((profile.custom_config or {}).get("paper_trading"))
+        self._paper_position: Optional[Dict] = None
+        self._paper_order_seq = 0
         self.exchange, self.public_exchange = self._init_exchange()
         self._set_leverage()
 
@@ -57,7 +60,7 @@ class ExchangeConnector:
                 }
             )
 
-            if self.profile.is_testnet:
+            if self.profile.is_testnet and not self.paper_trading:
                 for ex in (private_exchange, public_exchange):
                     ex.urls["api"][
                         "fapiPublic"
@@ -102,7 +105,7 @@ class ExchangeConnector:
                 }
             )
 
-            if self.profile.is_testnet:
+            if self.profile.is_testnet and not self.paper_trading:
                 # Bybit Demo Trading использует отдельный endpoint.
                 # options['demo'] = True не работает в ccxt 4.5.x — шаблон {hostname} не раскрывается.
                 # Также fetch_currencies() не поддерживается в demo → отключаем.
@@ -111,42 +114,49 @@ class ExchangeConnector:
                 exchange.has["fetchCurrencies"] = False
                 logger.info(f"[{self.profile.user_id}] Bybit Demo Trading mode enabled (api-demo.bybit.com)")
 
+            if self.paper_trading:
+                logger.info(
+                    f"[{self.profile.user_id}] PAPER trading enabled: "
+                    "using live market data, no real orders"
+                )
+
             exchange.load_markets()
             self._market_symbol = self._resolve_bybit_linear_symbol(exchange)
             logger.info(f"[{self.profile.user_id}] Connected to {name.upper()}")
 
-            # Определяем и переключаем position mode на One-Way (0).
-            # В Hedge Mode (3) SELL без positionIdx возвращает retCode:170131.
-            # Если позиции уже открыты — переключение не сработает, но
-            # place_market_order всё равно добавит нужный positionIdx.
             self._bybit_hedge_mode = False
-            try:
-                resp = exchange.privateGetV5PositionSwitchPositionMode({
-                    "category": "linear", "coin": "USDT"
-                })
-                mode = int((resp.get("result") or {}).get("mode", 0))
-                if mode == 3:  # BothSide (Hedge)
-                    # Пытаемся переключить в One-Way
-                    try:
-                        exchange.privatePostV5PositionSwitchPositionMode({
-                            "category": "linear", "coin": "USDT", "mode": 0
-                        })
-                        logger.info(f"[{self.profile.user_id}] Bybit: switched to One-Way mode")
-                        self._bybit_hedge_mode = False
-                    except Exception as sw_err:
-                        # Переключение не удалось (открытые позиции?) — остаёмся в Hedge
-                        logger.warning(
-                            f"[{self.profile.user_id}] Bybit: cannot switch to One-Way "
-                            f"(staying in Hedge mode, will use positionIdx): {sw_err}"
-                        )
-                        self._bybit_hedge_mode = True
-                else:
-                    logger.info(f"[{self.profile.user_id}] Bybit: One-Way mode confirmed")
-            except Exception as e:
-                logger.warning(f"[{self.profile.user_id}] Bybit: could not detect position mode: {e}")
-                # Без подтверждения Hedge Mode остаёмся в One-Way.
-                # Иначе Bybit One-Way отклоняет ордер: "position idx not match position mode".
-                self._bybit_hedge_mode = False
+            if not self.paper_trading:
+                # Определяем и переключаем position mode на One-Way (0).
+                # В Hedge Mode (3) SELL без positionIdx возвращает retCode:170131.
+                # Если позиции уже открыты — переключение не сработает, но
+                # place_market_order всё равно добавит нужный positionIdx.
+                try:
+                    resp = exchange.privateGetV5PositionSwitchPositionMode({
+                        "category": "linear", "coin": "USDT"
+                    })
+                    mode = int((resp.get("result") or {}).get("mode", 0))
+                    if mode == 3:  # BothSide (Hedge)
+                        # Пытаемся переключить в One-Way
+                        try:
+                            exchange.privatePostV5PositionSwitchPositionMode({
+                                "category": "linear", "coin": "USDT", "mode": 0
+                            })
+                            logger.info(f"[{self.profile.user_id}] Bybit: switched to One-Way mode")
+                            self._bybit_hedge_mode = False
+                        except Exception as sw_err:
+                            # Переключение не удалось (открытые позиции?) — остаёмся в Hedge
+                            logger.warning(
+                                f"[{self.profile.user_id}] Bybit: cannot switch to One-Way "
+                                f"(staying in Hedge mode, will use positionIdx): {sw_err}"
+                            )
+                            self._bybit_hedge_mode = True
+                    else:
+                        logger.info(f"[{self.profile.user_id}] Bybit: One-Way mode confirmed")
+                except Exception as e:
+                    logger.warning(f"[{self.profile.user_id}] Bybit: could not detect position mode: {e}")
+                    # Без подтверждения Hedge Mode остаёмся в One-Way.
+                    # Иначе Bybit One-Way отклоняет ордер: "position idx not match position mode".
+                    self._bybit_hedge_mode = False
 
             return exchange, exchange
 
@@ -240,6 +250,22 @@ class ExchangeConnector:
 
     def fetch_balance(self) -> Dict:
         """Баланс аккаунта"""
+        if self.paper_trading:
+            custom_config = self.profile.custom_config or {}
+            total = float(custom_config.get("virtual_balance_usdt", 10000.0))
+            used = 0.0
+            if self._paper_position:
+                used = (
+                    float(self._paper_position.get("contracts", 0.0)) *
+                    float(self._paper_position.get("entryPrice", 0.0)) /
+                    max(float(self.profile.leverage), 1.0)
+                )
+            return {
+                "total": total,
+                "free": max(0.0, total - used),
+                "used": used,
+            }
+
         if self.profile.exchange.lower() == "binance":
             balances = self.exchange.fapiPrivateV2GetBalance()
             usdt_row = next((x for x in balances if x.get("asset") == "USDT"), None)
@@ -289,6 +315,10 @@ class ExchangeConnector:
 
     def fetch_positions(self) -> List[Dict]:
         """Открытые позиции"""
+        if self.paper_trading:
+            self._last_positions_fetch_ok = True
+            return [dict(self._paper_position)] if self._paper_position else []
+
         try:
             if self.profile.exchange.lower() == "bybit":
                 symbol_id = self.exchange.market(self._market_symbol)["id"]
@@ -325,6 +355,9 @@ class ExchangeConnector:
 
     def fetch_open_orders(self) -> List[Dict]:
         """Открытые ордера"""
+        if self.paper_trading:
+            return []
+
         try:
             return self.exchange.fetch_open_orders(
                 self._market_symbol,
@@ -357,8 +390,12 @@ class ExchangeConnector:
             logger.info(
                 f"[{self.profile.user_id}] place_market_order start | "
                 f"exchange={self.profile.exchange} testnet={self.profile.is_testnet} "
+                f"paper={self.paper_trading} "
                 f"symbol={self.profile.symbol} side={side} amount={amount} reduce_only={reduce_only}"
             )
+
+            if self.paper_trading:
+                return self._paper_market_order(side, amount, reduce_only)
 
             if self.profile.exchange.lower() == "binance":
                 logger.info(
@@ -453,6 +490,63 @@ class ExchangeConnector:
             logger.error(f"place_market_order error ({side} {amount}): {e}")
             return None
 
+    def _paper_market_order(self, side: str, amount: float, reduce_only: bool) -> Dict:
+        """Симулирует market-order по live ticker без отправки на биржу."""
+        ticker = self.fetch_ticker()
+        price = float(
+            ticker.get("last") or ticker.get("close") or
+            ticker.get("bid") or ticker.get("ask") or 0.0
+        )
+        if price <= 0:
+            raise ValueError("paper ticker price is empty")
+
+        custom_config = self.profile.custom_config or {}
+        slippage_pct = float(custom_config.get("paper_slippage_pct", 0.0002))
+        fee_rate = float(custom_config.get("paper_fee_rate", 0.001))
+
+        fill_price = price * (1 + slippage_pct if side == "buy" else 1 - slippage_pct)
+        fee = abs(fill_price * amount * fee_rate)
+        self._paper_order_seq += 1
+        order_id = f"paper-{int(time.time())}-{self._paper_order_seq}"
+
+        if reduce_only:
+            self._paper_position = None
+        else:
+            self._paper_position = {
+                "symbol": self.profile.symbol,
+                "side": "long" if side == "buy" else "short",
+                "contracts": float(amount),
+                "entryPrice": fill_price,
+                "unrealizedPnl": 0.0,
+                "info": {"paper": True},
+            }
+
+        logger.info(
+            f"[{self.profile.user_id}] PAPER MARKET {side.upper()} {amount} "
+            f"{self.profile.symbol} @ {fill_price:.6f} | id={order_id} "
+            f"fee={fee:.6f} reduce_only={reduce_only}"
+        )
+        return {
+            "id": order_id,
+            "orderId": order_id,
+            "status": "closed",
+            "symbol": self.profile.symbol,
+            "type": "market",
+            "side": side,
+            "amount": float(amount),
+            "filled": float(amount),
+            "average": fill_price,
+            "price": fill_price,
+            "fee": {"cost": fee, "currency": "USDT"},
+            "fees": [{"cost": fee, "currency": "USDT"}],
+            "info": {
+                "paper": True,
+                "avgPrice": str(fill_price),
+                "cumExecQty": str(amount),
+                "cumExecFee": str(fee),
+            },
+        }
+
     def _enrich_order_fill(self, order: Dict) -> Dict:
         """Дочитывает fill/fee для market-order, если биржа не отдала их сразу."""
         order_id = order.get("id") or order.get("orderId")
@@ -527,6 +621,25 @@ class ExchangeConnector:
             elif side == "short":
                 side = "sell"
 
+            if self.paper_trading:
+                self._paper_order_seq += 1
+                order_id = f"paper-limit-{int(time.time())}-{self._paper_order_seq}"
+                logger.info(
+                    f"[{self.profile.user_id}] PAPER LIMIT {side.upper()} {amount} @ {price} "
+                    f"{self.profile.symbol} | id={order_id}"
+                )
+                return {
+                    "id": order_id,
+                    "orderId": order_id,
+                    "status": "open",
+                    "symbol": self.profile.symbol,
+                    "type": "limit",
+                    "side": side,
+                    "amount": float(amount),
+                    "price": float(price),
+                    "info": {"paper": True},
+                }
+
             params = self._bybit_linear_params()
             if reduce_only:
                 params["reduceOnly"] = True
@@ -550,6 +663,10 @@ class ExchangeConnector:
 
     def cancel_order(self, order_id: str) -> bool:
         """Отмена ордера"""
+        if self.paper_trading:
+            logger.info(f"[{self.profile.user_id}] PAPER cancelled order {order_id}")
+            return True
+
         try:
             self.exchange.cancel_order(
                 order_id,
@@ -573,6 +690,10 @@ class ExchangeConnector:
 
     def close_all_positions(self) -> bool:
         """Принудительно закрыть все открытые позиции маркет-ордером"""
+        if self.paper_trading:
+            self._paper_position = None
+            return True
+
         positions = self.fetch_positions()
         if not positions:
             return True
