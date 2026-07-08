@@ -205,6 +205,14 @@ class ExchangeConnector:
 
     def set_leverage(self, leverage: int) -> bool:
         """Устанавливает плечо для текущего символа на бирже."""
+        if self.paper_trading:
+            self.profile.leverage = max(1, min(125, int(leverage)))
+            logger.info(
+                f"[{self.profile.user_id}] PAPER leverage → x{self.profile.leverage} "
+                f"({self.profile.symbol})"
+            )
+            return True
+
         try:
             leverage = max(1, min(125, int(leverage)))
             symbol = self._market_symbol
