@@ -548,12 +548,10 @@ class ExchangeConnector:
             "average": fill_price,
             "price": fill_price,
             "fee": {"cost": fee, "currency": "USDT"},
-            "fees": [{"cost": fee, "currency": "USDT"}],
             "info": {
                 "paper": True,
                 "avgPrice": str(fill_price),
                 "cumExecQty": str(amount),
-                "cumExecFee": str(fee),
             },
         }
 
