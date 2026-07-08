@@ -92,18 +92,19 @@ class ExchangeConnector:
             return private_exchange, public_exchange
 
         elif name == "bybit":
-            exchange = ccxt.bybit(
-                {
-                    "apiKey": self.profile.api_key,
-                    "secret": self.profile.api_secret,
-                    "enableRateLimit": True,
-                    "options": {
-                        "defaultType": "linear",
-                        "defaultSubType": "linear",
-                        "adjustForTimeDifference": True,
-                    },
-                }
-            )
+            bybit_config = {
+                "enableRateLimit": True,
+                "options": {
+                    "defaultType": "linear",
+                    "defaultSubType": "linear",
+                    "adjustForTimeDifference": True,
+                },
+            }
+            if not self.paper_trading:
+                bybit_config["apiKey"] = self.profile.api_key
+                bybit_config["secret"] = self.profile.api_secret
+
+            exchange = ccxt.bybit(bybit_config)
 
             if self.profile.is_testnet and not self.paper_trading:
                 # Bybit Demo Trading использует отдельный endpoint.
@@ -115,6 +116,7 @@ class ExchangeConnector:
                 logger.info(f"[{self.profile.user_id}] Bybit Demo Trading mode enabled (api-demo.bybit.com)")
 
             if self.paper_trading:
+                exchange.has["fetchCurrencies"] = False
                 logger.info(
                     f"[{self.profile.user_id}] PAPER trading enabled: "
                     "using live market data, no real orders"
