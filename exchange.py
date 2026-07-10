@@ -512,7 +512,7 @@ class ExchangeConnector:
 
         custom_config = self.profile.custom_config or {}
         slippage_pct = float(custom_config.get("paper_slippage_pct", 0.0002))
-        fee_rate = float(custom_config.get("paper_fee_rate", 0.001))
+        fee_rate = float(custom_config.get("paper_fee_rate", 0.00055))
 
         fill_price = price * (1 + slippage_pct if side == "buy" else 1 - slippage_pct)
         fee = abs(fill_price * amount * fee_rate)
