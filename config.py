@@ -49,7 +49,7 @@ class TrendBotConfig:
     sl_multiplier: float = 8.0            # SL = TP × sl_multiplier
     trail_pct: float = 0.006           # Trailing Stop: отступ от лучшей цены 0.6%
     trail_activate_pct: float = 0.004  # Trailing активируется при прибыли 0.4%
-    max_hold_minutes: int = 240        # Макс время удержания позиции (4 часа)
+    max_hold_minutes: int = 30         # Макс время удержания позиции (30 минут)
     base_position_pct: float = 0.05    # Базовый размер позиции 5%
     max_position_pct: float = 0.15     # Макс позиция 15%
     min_position_pct: float = 0.02     # Мин позиция 2%
@@ -79,7 +79,7 @@ class EntryBotConfig:
     sl_pct: float = 0.016              # SL 1.6% (TP × 8)
     position_pct: float = 0.05         # 5% депозита на каждую пару
     emergency_squeeze_pct: float = 0.15  # Экстренное закрытие при движении -15% против позиции
-    max_hold_minutes: int = 240        # Макс время удержания позиции (4 часа)
+    max_hold_minutes: int = 30         # Макс время удержания позиции (30 минут)
     # ATR-адаптивный TP/SL (все режимы = 0.2%)
     atr_quiet_threshold: float = 0.003    # ATR% < 0.3% → тихий рынок
     atr_volatile_threshold: float = 0.008  # ATR% > 0.8% → волатильный рынок
