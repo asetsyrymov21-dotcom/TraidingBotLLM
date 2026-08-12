@@ -1142,8 +1142,8 @@ def create_app():
         password = os.environ.get("WEB_PASSWORD", "")
         user = os.environ.get("WEB_USER", "admin")
 
-        # Внешний просмотр открыт, изменения настроек/состояния требуют пароль.
-        if _is_local_request() or request.method in ("GET", "HEAD", "OPTIONS"):
+        # Локальные проверки открыты, внешний доступ к панели требует пароль.
+        if _is_local_request():
             return None
 
         if not password:
